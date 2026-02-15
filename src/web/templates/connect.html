@@ -1,0 +1,29 @@
+{% extends "layout.html" %}
+
+{% block title %}Connect Mobile - Staggs Hectic Trader{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center mt-5">
+    <div class="col-md-6 text-center">
+        <div class="card border-gold">
+            <div class="card-body p-5">
+                <i class="fa-solid fa-qrcode fa-3x text-gold mb-3"></i>
+                <h3 class="text-gold">Mobile Connection</h3>
+                <p class="text-muted mb-4">Scan this QR code with your phone camera to login instantly.</p>
+
+                <div class="bg-white p-3 d-inline-block rounded">
+                    <img src="data:image/png;base64,{{ qr_base64 }}" alt="QR Code" class="img-fluid" style="max-width: 300px;">
+                </div>
+
+                <div class="mt-4">
+                    <div class="alert alert-info">
+                        <i class="fa-solid fa-info-circle"></i> This QR code contains a secure magic link valid for 5 minutes.
+                    </div>
+                </div>
+
+                <a href="/" class="btn btn-outline-light mt-3"><i class="fa-solid fa-arrow-left"></i> Back to Dashboard</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

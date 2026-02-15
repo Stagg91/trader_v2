@@ -1,0 +1,37 @@
+{% extends "layout.html" %}
+
+{% block title %}Login - Staggs Hectic Trader{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center align-items-center" style="min-height: 80vh;">
+    <div class="col-md-4 col-sm-10">
+        <div class="card shadow-lg border-gold">
+            <div class="card-body p-5">
+                <div class="text-center mb-4">
+                    <i class="fa-solid fa-user-astronaut fa-3x text-gold mb-3"></i>
+                    <h3 class="card-title text-gold">Login</h3>
+                    <p class="text-muted">Access your trading dashboard</p>
+                </div>
+
+                {% if error %}
+                <div class="alert alert-danger">{{ error }}</div>
+                {% endif %}
+
+                <form method="post">
+                    <div class="form-floating mb-3">
+                        <input type="text" name="username" class="form-control" id="username" placeholder="Username" required>
+                        <label for="username">Username</label>
+                    </div>
+                    <div class="form-floating mb-4">
+                        <input type="password" name="password" class="form-control" id="password" placeholder="Password" required>
+                        <label for="password">Password</label>
+                    </div>
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-primary btn-lg">Sign In</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
