@@ -575,10 +575,12 @@ async def strategies_page(request: Request, db: Session = Depends(get_db)):
             perf_map[sid] = {
                 'roi': [],
                 'dd': [],
+                'win': [],
                 'latest_id': r.id # First result is latest due to sort
             }
         perf_map[sid]['roi'].append(r.roi)
         perf_map[sid]['dd'].append(r.max_drawdown)
+        perf_map[sid]['win'].append(r.win_rate)
 
     # Generate Matrix Data & Leaderboard
     matrix_data = []
@@ -588,9 +590,10 @@ async def strategies_page(request: Request, db: Session = Depends(get_db)):
         if s.id in perf_map:
             avg_roi = np.mean(perf_map[s.id]['roi'])
             avg_dd = np.mean(perf_map[s.id]['dd'])
+            avg_win = np.mean(perf_map[s.id]['win'])
             latest_id = perf_map[s.id]['latest_id']
 
-            # Matrix Data: Include ALL strategies with results (Issue 3)
+            # Matrix Data: Include ALL strategies with results
             matrix_data.append({
                 'id': s.id,
                 'x': avg_dd,
@@ -598,23 +601,23 @@ async def strategies_page(request: Request, db: Session = Depends(get_db)):
                 'text': f"{s.name} (Gen {s.generation})"
             })
 
-            # Leaderboard (Top 20 will be filtered after sort)
+            # Leaderboard (Full List)
             leaderboard.append({
                 'strategy': s,
                 'roi': avg_roi,
                 'max_drawdown': avg_dd,
-                'win_rate': 0, # Could calc avg winrate if needed
+                'win_rate': avg_win,
                 'last_result_id': latest_id
             })
 
-    # Sort Leaderboard by ROI
+    # Sort Leaderboard by ROI (Default)
     leaderboard.sort(key=lambda x: x['roi'], reverse=True)
-    leaderboard_top_20 = leaderboard[:20]
+    # leaderboard_top_20 = leaderboard[:20] # Removed limit per request
 
     return templates.TemplateResponse("strategies.html", {
         "request": request,
         "matrix_data": matrix_data,
-        "leaderboard": leaderboard_top_20
+        "leaderboard": leaderboard
     })
 
 @app.post("/strategies/delete")

@@ -47,49 +47,62 @@
         </div>
     </div>
 
-    <!-- Top 20 Leaderboard -->
-    <h3>Top 20 Leaderboard</h3>
-    <div class="table-responsive">
-        <table class="table table-dark table-hover align-middle">
-            <thead>
-                <tr>
-                    <th>Rank</th>
-                    <th>Strategy Name</th>
-                    <th>Gen</th>
-                    <th>Avg ROI</th>
-                    <th>Avg Win Rate</th>
-                    <th>Avg Drawdown</th>
-                    <th>Last Result</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for item in leaderboard %}
-                <tr>
-                    <td><span class="badge bg-secondary">#{{ loop.index }}</span></td>
-                    <td class="fw-bold text-gold">{{ item.strategy.name }}</td>
-                    <td><span class="badge bg-dark border border-secondary">{{ item.strategy.generation }}</span></td>
-                    <td class="{{ 'text-success' if item.roi > 0 else 'text-danger' }}">{{ "%.2f"|format(item.roi) }}%</td>
-                    <td>{{ "%.1f"|format(item.win_rate) }}%</td>
-                    <td class="text-danger">{{ "%.2f"|format(item.max_drawdown) }}%</td>
-                    <td>
-                        {% if item.last_result_id %}
-                            <a href="/backtest/result/{{ item.last_result_id }}" class="badge bg-info text-decoration-none">
-                                <i class="fa-solid fa-chart-line"></i> View
-                            </a>
-                        {% else %}
-                            <span class="text-muted small">N/A</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        <button class="btn btn-sm btn-outline-info" onclick="openStrategyModal('{{ item.strategy.id }}')">
-                            <i class="fa-solid fa-eye"></i> Details
-                        </button>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    <!-- Leaderboard -->
+    <div class="card bg-dark border-secondary">
+        <div class="card-header border-secondary d-flex justify-content-between align-items-center">
+            <span><i class="fa-solid fa-trophy text-gold"></i> Strategy Leaderboard</span>
+
+            <div class="btn-group btn-group-sm">
+                <button type="button" class="btn btn-outline-secondary" onclick="sortTable('roi')">Sort ROI</button>
+                <button type="button" class="btn btn-outline-secondary" onclick="sortTable('win')">Sort Win%</button>
+                <button type="button" class="btn btn-outline-secondary" onclick="sortTable('dd')">Sort DD%</button>
+            </div>
+        </div>
+        <div class="card-body p-0">
+            <!-- Scrollbox container -->
+            <div style="max-height: 60vh; overflow-y: auto;">
+                <table class="table table-dark table-hover align-middle mb-0" id="leaderboardTable">
+                    <thead style="position: sticky; top: 0; z-index: 1; background-color: #212529;">
+                        <tr>
+                            <th>Rank</th>
+                            <th>Strategy Name</th>
+                            <th>Gen</th>
+                            <th>Avg ROI</th>
+                            <th>Avg Win Rate</th>
+                            <th>Avg Drawdown</th>
+                            <th>Last Result</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in leaderboard %}
+                        <tr data-roi="{{ item.roi }}" data-win="{{ item.win_rate }}" data-dd="{{ item.max_drawdown }}">
+                            <td><span class="badge bg-secondary rank-badge">#{{ loop.index }}</span></td>
+                            <td class="fw-bold text-gold">{{ item.strategy.name }}</td>
+                            <td><span class="badge bg-dark border border-secondary">{{ item.strategy.generation }}</span></td>
+                            <td class="{{ 'text-success' if item.roi > 0 else 'text-danger' }}">{{ "%.2f"|format(item.roi) }}%</td>
+                            <td>{{ "%.1f"|format(item.win_rate) }}%</td>
+                            <td class="text-danger">{{ "%.2f"|format(item.max_drawdown) }}%</td>
+                            <td>
+                                {% if item.last_result_id %}
+                                    <a href="/backtest/result/{{ item.last_result_id }}" class="badge bg-info text-decoration-none">
+                                        <i class="fa-solid fa-chart-line"></i> View
+                                    </a>
+                                {% else %}
+                                    <span class="text-muted small">N/A</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <button class="btn btn-sm btn-outline-info" onclick="openStrategyModal('{{ item.strategy.id }}')">
+                                    <i class="fa-solid fa-eye"></i> Details
+                                </button>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
 
 </div>
@@ -285,6 +298,33 @@
         document.getElementById('modalEndDate').value = new Date().toISOString().split('T')[0];
 
         new bootstrap.Modal(document.getElementById('backtestModal')).show();
+    }
+
+    // --- 4. Sorting Logic ---
+    function sortTable(type) {
+        var table = document.getElementById("leaderboardTable");
+        var tbody = table.tBodies[0];
+        var rows = Array.from(tbody.rows);
+
+        rows.sort(function(a, b) {
+            var valA = parseFloat(a.getAttribute('data-' + type));
+            var valB = parseFloat(b.getAttribute('data-' + type));
+
+            // Drawdown is better when closer to 0 (e.g. -5 > -20)
+            // But we display negative numbers.
+            // ROI: Higher is better.
+            // Win: Higher is better.
+            // DD: Higher (closer to 0) is better. e.g. -5 vs -50. -5 is larger.
+
+            return valB - valA; // Descending order
+        });
+
+        // Re-append rows
+        rows.forEach(function(row, index) {
+            tbody.appendChild(row);
+            // Update Rank Badge
+            row.querySelector('.rank-badge').innerText = '#' + (index + 1);
+        });
     }
 </script>
 {% endblock %}
