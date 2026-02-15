@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+*.db
+server.log
+server.pid
+*.joblib
+*.joblib_features
+build/
+dist/
+*.spec
