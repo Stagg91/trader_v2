@@ -229,12 +229,40 @@ def bot_loop():
                                     current_size = float(p.get('size', 0))
 
                                 if signal == "buy" and current_size == 0:
-                                    # Risk Check
-                                    bal_resp = client.get_balance("USDT")
-                                    # ... (Logic similar to before)
-                                    # Simplified:
-                                    print(f"[{symbol}] BUY Signal from {active_strategy.name}")
-                                    client.open_trade(symbol, "Buy", 0.001, "Market") # Mock qty
+                                    # Calculate SL/TP
+                                    sl_pct = recipe.stop_loss / 100.0 if recipe.stop_loss else 0
+                                    tp_pct = recipe.take_profit / 100.0 if recipe.take_profit else 0
+                                    ts_pct = getattr(recipe, 'trailing_stop', 0) / 100.0
+
+                                    current_price = df.iloc[-1]['close'] # Latest Close
+
+                                    # Fetch Ticker for accurate Limit Price
+                                    ticker_resp = client.session.get_tickers(category="linear", symbol=symbol)
+                                    best_ask = current_price
+                                    try:
+                                        best_ask = float(ticker_resp['result']['list'][0]['ask1Price'])
+                                    except: pass
+
+                                    # Limit Price = Best Ask (Marketable Limit to avoid slippage)
+                                    limit_price = best_ask
+
+                                    sl_trigger = round(limit_price * (1 - sl_pct), 2) if sl_pct > 0 else None
+                                    tp_trigger = round(limit_price * (1 + tp_pct), 2) if tp_pct > 0 else None
+                                    ts_dist = round(limit_price * ts_pct, 2) if ts_pct > 0 else None
+
+                                    print(f"[{symbol}] BUY Signal from {active_strategy.name} (Limit: {limit_price}, SL: {sl_trigger}, TP: {tp_trigger})")
+
+                                    # Place Order (Limit)
+                                    client.open_trade(
+                                        symbol=symbol,
+                                        side="Buy",
+                                        qty=0.001,
+                                        order_type="Limit",
+                                        price=limit_price,
+                                        stop_loss=sl_trigger,
+                                        take_profit=tp_trigger,
+                                        trailing_stop=ts_dist
+                                    )
                                     NotificationManager.send("Trade Executed", f"Bought {symbol}")
 
                                 elif signal == "sell" and current_size > 0:

@@ -1,0 +1,185 @@
+from pybit.unified_trading import HTTP
+import os
+
+class BybitClient:
+    def __init__(self, api_key: str = None, api_secret: str = None, testnet: bool = True):
+        self.session = HTTP(
+            testnet=testnet,
+            api_key=api_key,
+            api_secret=api_secret
+        )
+
+    def get_balance(self, coin: str = "USDT", account_type: str = "UNIFIED"):
+        """
+        Fetches the wallet balance for a specific coin.
+        """
+        try:
+            response = self.session.get_wallet_balance(
+                accountType=account_type,
+                coin=coin
+            )
+            return response
+        except Exception as e:
+            print(f"Error fetching balance: {e}")
+            return None
+
+    def open_trade(self, symbol: str, side: str, qty: float, order_type: str = "Market", price: float = None, category: str = "linear", stop_loss: float = None, take_profit: float = None, trailing_stop: float = None):
+        """
+        Opens a trade.
+        :param symbol: e.g., "BTCUSDT"
+        :param side: "Buy" or "Sell"
+        :param qty: Quantity to trade
+        :param order_type: "Market" or "Limit"
+        :param price: Required if order_type is "Limit"
+        :param category: "linear", "inverse", "spot", etc. Default "linear" (Perpetual)
+        :param stop_loss: Trigger Price for SL
+        :param take_profit: Trigger Price for TP
+        :param trailing_stop: Distance for Trailing Stop (e.g. 50.0 USDT)
+        """
+        try:
+            order_params = {
+                "category": category,
+                "symbol": symbol,
+                "side": side.capitalize(),
+                "orderType": order_type.capitalize(),
+                "qty": str(qty),
+            }
+            if order_type.lower() == "limit" and price:
+                order_params["price"] = str(price)
+
+            if stop_loss:
+                order_params["stopLoss"] = str(stop_loss)
+            if take_profit:
+                order_params["takeProfit"] = str(take_profit)
+            if trailing_stop:
+                order_params["trailingStop"] = str(trailing_stop)
+
+            response = self.session.place_order(**order_params)
+            return response
+        except Exception as e:
+            print(f"Error placing order: {e}")
+            return None
+
+    def modify_trade(self, symbol: str, order_id: str, new_qty: float = None, new_price: float = None, category: str = "linear"):
+        """
+        Modifies an existing order.
+        """
+        try:
+            params = {
+                "category": category,
+                "symbol": symbol,
+                "orderId": order_id
+            }
+            if new_qty:
+                params["qty"] = str(new_qty)
+            if new_price:
+                params["price"] = str(new_price)
+
+            response = self.session.amend_order(**params)
+            return response
+        except Exception as e:
+            print(f"Error modifying order: {e}")
+            return None
+
+    def close_trade(self, symbol: str, order_id: str, category: str = "linear"):
+        """
+        Cancels a specific open order.
+        """
+        try:
+            response = self.session.cancel_order(
+                category=category,
+                symbol=symbol,
+                orderId=order_id
+            )
+            return response
+        except Exception as e:
+            print(f"Error cancelling order: {e}")
+            return None
+
+    def close_position(self, symbol: str, category: str = "linear"):
+        """
+        Closes a position by placing a market order in the opposite direction.
+        """
+        try:
+            positions = self.session.get_positions(
+                category=category,
+                symbol=symbol
+            )
+            # Iterate through positions to find the one matching the symbol (although get_positions with symbol should return only that)
+            position_list = positions.get('result', {}).get('list', [])
+
+            for pos in position_list:
+                size = float(pos.get('size', 0))
+                if size > 0:
+                    side = pos.get('side') # "Buy" or "Sell" or "None"
+                    if side == "None":
+                         continue
+
+                    # To close, we do the opposite
+                    close_side = "Sell" if side == "Buy" else "Buy"
+                    print(f"Closing position for {symbol}: {side} {size} -> {close_side}")
+                    return self.open_trade(symbol, close_side, size, order_type="Market", category=category)
+
+            print(f"No open position found for {symbol}")
+            return None
+        except Exception as e:
+            print(f"Error closing position: {e}")
+            return None
+
+    def get_instruments(self, category: str = "linear"):
+        """
+        Fetches all trading pairs.
+        """
+        try:
+            # Iteration needed if pagination? usually instruments info is large
+            # V5 Get Instruments Info
+            response = self.session.get_instruments_info(category=category, limit=1000)
+            return response
+        except Exception as e:
+            print(f"Error fetching instruments: {e}")
+            return None
+
+    def get_tickers(self, category: str = "linear"):
+        """
+        Fetches real-time ticker data for all symbols.
+        """
+        try:
+            response = self.session.get_tickers(category=category)
+            return response
+        except Exception as e:
+            print(f"Error fetching tickers: {e}")
+            return None
+
+    def fetch_full_history(self, symbol: str, interval: str, start_time: int = None, end_time: int = None, limit: int = 200):
+        """
+        Fetches historical kline data using V5 API.
+        """
+        try:
+            params = {
+                "category": "linear",
+                "symbol": symbol,
+                "interval": interval,
+                "limit": limit
+            }
+            if start_time:
+                params["start"] = start_time
+            if end_time:
+                params["end"] = end_time
+
+            response = self.session.get_kline(**params)
+            # Result list: [startTime, open, high, low, close, volume, turnover]
+            return response.get('result', {}).get('list', [])
+        except Exception as e:
+            print(f"Error fetching history for {symbol}: {e}")
+            return []
+
+    def get_orderbook(self, symbol: str, limit: int = 50, category: str = "linear"):
+        """
+        Fetches order book (depth) data.
+        """
+        try:
+            response = self.session.get_orderbook(category=category, symbol=symbol, limit=limit)
+            return response
+        except Exception as e:
+            print(f"Error fetching orderbook: {e}")
+            return None

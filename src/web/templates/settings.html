@@ -1,0 +1,114 @@
+{% extends "layout.html" %}
+
+{% block title %}Settings - Staggs Hectic Trader{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col-12">
+        <h1 class="text-gold">Settings</h1>
+    </div>
+</div>
+
+<div class="row justify-content-center">
+    <div class="col-md-8 col-sm-12">
+        <div class="card shadow">
+            <div class="card-header"><i class="fa-solid fa-cogs"></i> Configuration</div>
+            <div class="card-body">
+                {% if message %}
+                <div class="alert alert-success alert-dismissible fade show" role="alert">
+                    {{ message }}
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                </div>
+                {% endif %}
+
+                <form method="post">
+                    <h5 class="text-gold mb-3">Bybit API</h5>
+                    <div class="form-floating mb-3">
+                        <input type="text" name="api_key" class="form-control" id="apiKey" value="{{ settings.api_key if settings else '' }}" placeholder="API Key">
+                        <label for="apiKey">API Key</label>
+                    </div>
+                    <div class="form-floating mb-3">
+                        <input type="password" name="api_secret" class="form-control" id="apiSecret" value="{{ settings.api_secret if settings else '' }}" placeholder="API Secret">
+                        <label for="apiSecret">API Secret</label>
+                    </div>
+                    <div class="form-check form-switch mb-4">
+                        <input class="form-check-input" type="checkbox" name="testnet" id="testnet" value="true" {% if settings and settings.testnet %}checked{% endif %}>
+                        <label class="form-check-label" for="testnet">Use Testnet (Recommended for dev)</label>
+                    </div>
+
+                    <h5 class="text-gold mb-3">AI Integration</h5>
+                    <div class="form-floating mb-3">
+                        <input type="text" name="gemini_key" class="form-control" id="geminiKey" value="{{ settings.gemini_api_key if settings else '' }}" placeholder="Gemini API Key">
+                        <label for="geminiKey">Google Gemini API Key</label>
+                    </div>
+
+                    <h5 class="text-gold mb-3">Automation</h5>
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" name="auto_evolve" id="autoEvolve" value="true" {% if settings and settings.auto_evolve %}checked{% endif %}>
+                        <label class="form-check-label" for="autoEvolve">Enable Continuous Evolution</label>
+                        <div class="form-text">Automatically breeds new strategies based on the interval below.</div>
+                    </div>
+
+                    <div class="form-floating mb-3">
+                        <input type="number" name="evolution_interval" class="form-control bg-dark text-white border-secondary" id="evoInterval" value="{{ settings.evolution_interval if settings else 30 }}" min="5">
+                        <label for="evoInterval">Evolution Interval (Minutes)</label>
+                    </div>
+
+                    <label class="form-label mt-2">Evolution Lookback Period</label>
+                    <div class="input-group mb-3">
+                        <input type="number" name="evolution_lookback_value" class="form-control bg-dark text-white border-secondary" value="{{ settings.evolution_lookback_value }}" min="1">
+                        <select name="evolution_lookback_unit" class="form-select bg-dark text-white border-secondary">
+                            <option value="Hours" {% if settings.evolution_lookback_unit == 'Hours' %}selected{% endif %}>Hours</option>
+                            <option value="Days" {% if settings.evolution_lookback_unit == 'Days' %}selected{% endif %}>Days</option>
+                            <option value="Weeks" {% if settings.evolution_lookback_unit == 'Weeks' %}selected{% endif %}>Weeks</option>
+                            <option value="Months" {% if settings.evolution_lookback_unit == 'Months' %}selected{% endif %}>Months</option>
+                            <option value="Years" {% if settings.evolution_lookback_unit == 'Years' %}selected{% endif %}>Years</option>
+                        </select>
+                    </div>
+
+                    <hr class="border-secondary my-4">
+
+                    <div class="card bg-dark border-secondary mb-3">
+                        <div class="card-body">
+                            <h5 class="text-gold">Risk Management (State)</h5>
+                            <div class="d-flex justify-content-between align-items-center">
+                                <span>Daily PnL (Resets daily UTC):</span>
+                                <span class="badge {% if settings.daily_pnl < 0 %}bg-danger{% else %}bg-success{% endif %} fs-6">
+                                    ${{ "%.2f"|format(settings.daily_pnl) }}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <h5 class="text-gold mb-3">Execution Mode</h5>
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input bg-danger border-danger" type="checkbox" name="is_active" id="isActive" value="true" {% if settings and settings.is_active %}checked{% endif %}>
+                        <label class="form-check-label text-danger fw-bold" for="isActive">Enable Live Trading</label>
+                        <div class="form-text">When enabled, the bot WILL execute trades with real/paper money.</div>
+                    </div>
+
+                    <div class="card bg-dark border-secondary mb-3">
+                        <div class="card-body">
+                            <div class="form-check form-switch mb-2">
+                                <input class="form-check-input" type="checkbox" name="paper_trading" id="paperTrading" value="true" {% if settings and settings.paper_trading %}checked{% endif %}>
+                                <label class="form-check-label text-info fw-bold" for="paperTrading">Paper Trading Mode</label>
+                            </div>
+                            <div class="input-group">
+                                <span class="input-group-text bg-dark border-secondary text-muted">$</span>
+                                <div class="form-floating flex-grow-1">
+                                    <input type="number" step="0.01" name="paper_balance" class="form-control border-secondary" id="paperBalance" value="{{ settings.paper_balance if settings else '10000.0' }}" placeholder="Balance">
+                                    <label for="paperBalance">Simulated Balance</label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="d-grid gap-2 mt-4">
+                        <button type="submit" class="btn btn-primary btn-lg"><i class="fa-solid fa-save"></i> Save Settings</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

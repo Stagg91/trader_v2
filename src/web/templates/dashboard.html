@@ -1,0 +1,267 @@
+{% extends "layout.html" %}
+
+{% block title %}Dashboard - Staggs Hectic Trader{% endblock %}
+
+{% block head %}
+<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col-12">
+        <h1 class="text-gold">Dashboard</h1>
+    </div>
+</div>
+
+<!-- Stats Row -->
+<div class="row g-3 mb-4">
+    <div class="col-md-4 col-sm-12">
+        <div class="card h-100">
+            <div class="card-body text-center">
+                <h5 class="card-title text-muted">Total Equity (USDT)</h5>
+                <h2 class="text-gold">{{ balance.totalEquity if balance else '0.00' }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 col-sm-12">
+        <div class="card h-100">
+            <div class="card-body text-center">
+                <h5 class="card-title text-muted">Trading Status</h5>
+                {% if settings and settings.is_active %}
+                    <h2 class="text-success"><i class="fa-solid fa-circle-play"></i> Active</h2>
+                {% else %}
+                    <h2 class="text-danger"><i class="fa-solid fa-circle-pause"></i> Paused</h2>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 col-sm-12">
+        <div class="card h-100">
+            <div class="card-body text-center">
+                <h5 class="card-title text-muted">Environment</h5>
+                {% if settings and settings.paper_trading %}
+                    <h2 class="text-info"><i class="fa-solid fa-paper-plane"></i> Paper</h2>
+                {% else %}
+                    <h2 class="text-warning"><i class="fa-solid fa-fire"></i> Live</h2>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Chart Row -->
+<div class="row mb-4">
+    <!-- Market Watch -->
+    <div class="col-md-4 col-sm-12">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="fa-solid fa-list"></i> Market Watch</span>
+                <input type="text" id="marketSearch" class="form-control form-control-sm" placeholder="Search..." style="width: 120px;">
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                    <table class="table table-hover table-striped mb-0">
+                        <thead class="sticky-top bg-dark">
+                            <tr>
+                                <th>Pair</th>
+                                <th>Price</th>
+                                <th>24h%</th>
+                            </tr>
+                        </thead>
+                        <tbody id="marketWatchBody">
+                            <tr><td colspan="3" class="text-center">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chart -->
+    <div class="col-md-8 col-sm-12">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <div class="d-flex align-items-center gap-2">
+                    <span><i class="fa-solid fa-chart-candlestick"></i> Live Chart</span>
+                    <select id="chartSymbol" class="form-select form-select-sm bg-dark text-white" style="width: auto;">
+                        <option value="BTCUSDT">BTCUSDT</option>
+                        <option value="ETHUSDT">ETHUSDT</option>
+                        <option value="SOLUSDT">SOLUSDT</option>
+                    </select>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <select id="chartInterval" class="form-select form-select-sm bg-dark text-white" style="width: auto;">
+                        <option value="5">5m</option>
+                        <option value="15">15m</option>
+                        <option value="60" selected>1h</option>
+                        <option value="240">4h</option>
+                        <option value="D">1d</option>
+                    </select>
+                    <button class="btn btn-sm btn-outline-warning" onclick="triggerSync()">
+                        <i class="fa-solid fa-rotate"></i> Sync
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div id="chart" style="width:100%; min-height:400px;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Notifications -->
+<div class="row mb-5">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header"><i class="fa-solid fa-bell"></i> Notifications</div>
+            <ul class="list-group list-group-flush">
+                {% if notifications %}
+                    {% for n in notifications %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center" style="background-color: transparent; color: var(--text-primary);">
+                        <div>
+                            <strong>{{ n.title }}</strong><br>
+                            <small class="text-muted">{{ n.message }}</small>
+                        </div>
+                        <span class="badge bg-secondary rounded-pill">{{ n.timestamp|round|int }}</span>
+                    </li>
+                    {% endfor %}
+                {% else %}
+                    <li class="list-group-item" style="background-color: transparent; color: var(--text-muted);">No new notifications.</li>
+                {% endif %}
+            </ul>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function triggerSync() {
+        if(confirm("Start background data sync for all pairs? This may take time.")) {
+            await fetch('/api/sync_data', { method: 'POST' });
+            alert("Sync started in background.");
+        }
+    }
+
+    async function loadChart() {
+        const symbol = document.getElementById('chartSymbol').value;
+        const interval = document.getElementById('chartInterval').value;
+
+        // Use new history API which checks Warehouse first
+        // Note: endpoint params might differ slightly from original chart_data
+        try {
+            // Using /api/history instead of /api/chart_data
+            const response = await fetch(`/api/history?symbol=${symbol}&interval=${interval}&limit=500`);
+            if (!response.ok) throw new Error("Network response was not ok");
+            const data = await response.json();
+
+            if(data.error || data.length === 0) {
+                console.error("Chart Error:", data.error);
+                document.getElementById('chart').innerHTML = `<div class="alert alert-warning m-3">${data.error}</div>`;
+                return;
+            }
+
+            // Fallback for missing datetime (use startTime ms)
+            const dates = data.map(r => r.datetime ? r.datetime : new Date(parseInt(r.startTime)));
+            const open = data.map(r => r.open);
+            const high = data.map(r => r.high);
+            const low = data.map(r => r.low);
+            const close = data.map(r => r.close);
+
+            const trace1 = {
+                x: dates,
+                close: close,
+                decreasing: {line: {color: '#dc3545'}},
+                high: high,
+                low: low,
+                increasing: {line: {color: '#28a745'}},
+                line: {color: 'rgba(31,119,180,1)'},
+                open: open,
+                type: 'candlestick',
+                xaxis: 'x',
+                yaxis: 'y'
+            };
+
+            const layout = {
+                dragmode: 'zoom',
+                showlegend: false,
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                font: { color: '#e0e0e0' },
+                xaxis: {
+                    autorange: true,
+                    gridcolor: '#444',
+                    title: 'Date',
+                    type: 'date'
+                },
+                yaxis: {
+                    autorange: true,
+                    gridcolor: '#444',
+                    type: 'linear'
+                },
+                margin: {l: 40, r: 10, t: 20, b: 40}
+            };
+
+            Plotly.newPlot('chart', [trace1], layout, {responsive: true});
+        } catch (e) {
+            console.error("Chart Load Failed:", e);
+            document.getElementById('chart').innerHTML = `<div class="alert alert-danger m-3">Chart loading failed: ${e.message}</div>`;
+        }
+    }
+
+    async function loadMarketWatch() {
+        const tbody = document.getElementById('marketWatchBody');
+        try {
+            const response = await fetch('/api/market_watch');
+            const data = await response.json();
+
+            if (data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="3" class="text-center">No Data</td></tr>';
+                return;
+            }
+
+            // Render
+            window.marketData = data; // Store for search
+            renderMarketTable(data);
+
+        } catch (e) {
+            console.error("Market Watch Error:", e);
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center text-danger">Error Loading Data</td></tr>';
+        }
+    }
+
+    function renderMarketTable(data) {
+        const tbody = document.getElementById('marketWatchBody');
+        let html = '';
+        data.forEach(item => {
+            const color = parseFloat(item.change) >= 0 ? 'text-success' : 'text-danger';
+            html += `
+            <tr>
+                <td>${item.symbol}</td>
+                <td>${item.price}</td>
+                <td class="${color}">${item.change}%</td>
+            </tr>
+            `;
+        });
+        tbody.innerHTML = html;
+    }
+
+    document.getElementById('marketSearch').addEventListener('input', (e) => {
+        const term = e.target.value.toUpperCase();
+        if (!window.marketData) return;
+        const filtered = window.marketData.filter(i => i.symbol.includes(term));
+        renderMarketTable(filtered);
+    });
+
+    // Load chart and resize on window change
+    loadChart();
+    loadMarketWatch();
+
+    // Listeners
+    document.getElementById('chartSymbol').addEventListener('change', loadChart);
+    document.getElementById('chartInterval').addEventListener('change', loadChart);
+
+    // Poll market watch every 10s
+    setInterval(loadMarketWatch, 10000);
+</script>
+{% endblock %}

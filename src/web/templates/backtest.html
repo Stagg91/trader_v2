@@ -1,0 +1,234 @@
+{% extends "layout.html" %}
+
+{% block title %}Backtest - Staggs Hectic Trader{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+    <div class="col-12">
+        <h1 class="text-gold">Backtest Strategy</h1>
+    </div>
+</div>
+
+<!-- AI Config -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card bg-dark border-gold">
+            <div class="card-body">
+                <h5 class="card-title text-gold"><i class="fa-solid fa-wand-magic-sparkles"></i> AI Strategy Designer</h5>
+                <p class="text-muted">Describe your goal (e.g., "Find the best scalping strategy for ETH") and let AI configure the backtest.</p>
+                <form action="/ai_backtest_config" method="post" class="d-flex gap-2">
+                    <input type="text" name="prompt" class="form-control" placeholder="Describe strategy...">
+                    <button class="btn btn-primary" type="submit">Auto-Configure</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Manual Config & Run -->
+<div class="row g-4">
+    <div class="col-md-4 col-sm-12">
+        <div class="card h-100">
+            <div class="card-header"><i class="fa-solid fa-sliders"></i> Configuration</div>
+            <div class="card-body">
+                <form id="backtestForm">
+
+                    <ul class="nav nav-pills mb-3" id="pills-tab" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="pills-manual-tab" data-bs-toggle="pill" data-bs-target="#pills-manual" type="button" role="tab" onclick="setMode('manual')">Manual</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="pills-ai-tab" data-bs-toggle="pill" data-bs-target="#pills-ai" type="button" role="tab" onclick="setMode('ai')">AI Strategy</button>
+                        </li>
+                    </ul>
+                    <input type="hidden" name="strategy_mode" id="strategyMode" value="manual">
+
+                    <div class="mb-3">
+                        <label class="form-label">Symbol</label>
+                        <input type="text" list="symbolList" name="symbol" class="form-control" value="{{ config.symbol if config else 'BTCUSDT' }}" placeholder="Type to search...">
+                        <datalist id="symbolList"></datalist>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col">
+                            <label class="form-label">Initial Balance ($)</label>
+                            <input type="number" name="initial_balance" class="form-control" value="10000">
+                        </div>
+                        <div class="col">
+                            <label class="form-label">Timeframe</label>
+                            <select name="interval" class="form-select">
+                                <option value="1">1 Minute</option>
+                                <option value="5">5 Minutes</option>
+                                <option value="15">15 Minutes</option>
+                                <option value="60" selected>1 Hour</option>
+                                <option value="240">4 Hours</option>
+                                <option value="D">1 Day</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col">
+                            <label class="form-label">Start Date</label>
+                            <input type="date" name="start_time" class="form-control">
+                        </div>
+                        <div class="col">
+                            <label class="form-label">End Date</label>
+                            <input type="date" name="end_time" class="form-control">
+                        </div>
+                    </div>
+
+                    <hr class="border-secondary">
+
+                    <div class="tab-content" id="pills-tabContent">
+                        <!-- Manual Config -->
+                        <div class="tab-pane fade show active" id="pills-manual" role="tabpanel">
+                            <h6 class="text-gold">RSI Strategy</h6>
+                            <div class="form-check form-switch mb-2">
+                                <input class="form-check-input" type="checkbox" name="rsi_enabled" value="true" {% if not config or config.rsi_enabled %}checked{% endif %}>
+                                <label class="form-check-label">Enable RSI</label>
+                            </div>
+                            <div class="input-group mb-2">
+                                <span class="input-group-text bg-dark text-muted border-secondary">Lower Start</span>
+                                <input type="number" name="rsi_lower_start" class="form-control" value="{{ config.rsi_lower_start if config else 20 }}">
+                            </div>
+                            <div class="input-group mb-2">
+                                <span class="input-group-text bg-dark text-muted border-secondary">Lower Stop</span>
+                                <input type="number" name="rsi_lower_stop" class="form-control" value="{{ config.rsi_lower_stop if config else 40 }}">
+                            </div>
+                            <div class="input-group mb-3">
+                                <span class="input-group-text bg-dark text-muted border-secondary">Step</span>
+                                <input type="number" name="rsi_lower_step" class="form-control" value="{{ config.rsi_lower_step if config else 5 }}">
+                            </div>
+
+                            <h6 class="text-gold">MACD Strategy</h6>
+                            <div class="form-check form-switch mb-3">
+                                <input class="form-check-input" type="checkbox" name="macd_enabled" value="true" {% if config and config.macd_enabled %}checked{% endif %}>
+                                <label class="form-check-label">Enable MACD</label>
+                            </div>
+                        </div>
+
+                        <!-- AI Strategy Config -->
+                        <div class="tab-pane fade" id="pills-ai" role="tabpanel">
+                            <h6 class="text-gold">Select AI Strategy</h6>
+                            <div class="mb-3">
+                                <select name="strategy_id" class="form-select">
+                                    <option value="" selected disabled>Choose a strategy...</option>
+                                    {% for strat in strategies %}
+                                    <option value="{{ strat.id }}">[{{ strat.generation }}] {{ strat.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <p class="text-muted small">Runs the exact logic of the selected AI strategy on the chosen symbol/timeframe.</p>
+                        </div>
+                    </div>
+
+                    <button type="button" onclick="runBacktest()" class="btn btn-primary w-100">
+                        <i class="fa-solid fa-play"></i> Run Backtest
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-8 col-sm-12">
+        <div class="card h-100">
+            <div class="card-header"><i class="fa-solid fa-list-ol"></i> Results</div>
+            <div class="card-body p-0">
+                <div class="table-responsive" style="max-height: 600px; overflow-y: auto;">
+                    <table class="table table-hover table-striped mb-0" id="resultsTable">
+                        <thead class="sticky-top bg-dark">
+                            <tr>
+                                <th>Params</th>
+                                <th>PnL ($)</th>
+                                <th>ROI (%)</th>
+                                <th>Trades</th>
+                                <th>Win Rate</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resultsBody">
+                            <tr><td colspan="5" class="text-center text-muted p-4">Run a backtest to see results.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function loadSymbols() {
+    try {
+        const response = await fetch('/api/symbols');
+        if (response.ok) {
+            const symbols = await response.json();
+            const dl = document.getElementById('symbolList');
+            dl.innerHTML = symbols.map(s => `<option value="${s}">`).join('');
+        }
+    } catch (e) {
+        console.error("Failed to load symbols", e);
+    }
+}
+loadSymbols();
+
+function setMode(mode) {
+    document.getElementById('strategyMode').value = mode;
+}
+
+async function runBacktest() {
+    const form = document.getElementById('backtestForm');
+    const formData = new FormData(form);
+    const tbody = document.getElementById('resultsBody');
+
+    tbody.innerHTML = '<tr><td colspan="5" class="text-center p-4"><div class="spinner-border text-gold" role="status"></div><br>Running Grid Search...</td></tr>';
+
+    try {
+        const response = await fetch('/run_backtest', {
+            method: 'POST',
+            body: formData
+        });
+
+        if (!response.ok) throw new Error("Backtest failed");
+
+        const results = await response.json();
+
+        if (results.error) {
+            tbody.innerHTML = `<tr><td colspan="5" class="text-center text-danger p-4">${results.error}</td></tr>`;
+            return;
+        }
+
+        if (results.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center p-4">No results found or data insufficient.</td></tr>';
+            return;
+        }
+
+        let html = '';
+        results.forEach(res => {
+            const m = res.metrics;
+            const p = res.params;
+            // Format params nicely
+            let paramStr = '';
+            if(p.rsi_enabled) paramStr += `RSI<${p.rsi_lower} `;
+            if(p.macd_enabled) paramStr += `MACD `;
+
+            html += `
+            <tr>
+                <td><small>${paramStr}</small></td>
+                <td class="${m.total_pnl >= 0 ? 'text-success' : 'text-danger'} fw-bold">${m.total_pnl.toFixed(2)}</td>
+                <td class="${m.roi_percent >= 0 ? 'text-success' : 'text-danger'}">${m.roi_percent.toFixed(2)}%</td>
+                <td>${m.num_trades}</td>
+                <td>${(m.win_rate * 100).toFixed(1)}%</td>
+            </tr>
+            `;
+        });
+        tbody.innerHTML = html;
+
+    } catch (e) {
+        console.error(e);
+        tbody.innerHTML = `<tr><td colspan="5" class="text-center text-danger p-4">Error: ${e.message}</td></tr>`;
+    }
+}
+</script>
+{% endblock %}
