@@ -41,10 +41,19 @@
                         {% endif %}
                     </td>
                     <td>
-                        <div class="progress" style="height: 20px;">
-                            <div class="progress-bar" role="progressbar" style="width: {{ job.progress }}%;" aria-valuenow="{{ job.progress }}" aria-valuemin="0" aria-valuemax="100">{{ "%.1f"|format(job.progress) }}%</div>
+                        <div class="d-flex justify-content-between">
+                            <small>{{ "%.1f"|format(job.progress) }}%</small>
+                            <small class="text-muted">
+                                {% if job.total_combinations > 0 %}
+                                    {{ (job.progress / 100 * job.total_combinations)|int }} / {{ job.total_combinations }}
+                                {% else %}
+                                    Calculating...
+                                {% endif %}
+                            </small>
                         </div>
-                        <small class="text-muted">{{ job.current_param_set }}</small>
+                        <div class="progress" style="height: 20px;">
+                            <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: {{ job.progress }}%;" aria-valuenow="{{ job.progress }}" aria-valuemin="0" aria-valuemax="100"></div>
+                        </div>
                     </td>
                     <td>{{ job.current_pair }}</td>
                     <td>{{ job.started_at|time_since|round(1) }}h ago</td>
@@ -84,11 +93,11 @@
 </div>
 
 <script>
-    // Simple auto-refresh every 5 seconds if there are running jobs
+    // Simple auto-refresh every 3 seconds if there are running jobs
     {% if has_running_jobs %}
     setTimeout(function(){
        location.reload();
-    }, 5000);
+    }, 3000);
     {% endif %}
 </script>
 {% endblock %}
