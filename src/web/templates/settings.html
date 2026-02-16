@@ -54,6 +54,12 @@
                         <label for="evoInterval">Evolution Interval (Minutes)</label>
                     </div>
 
+                    <label for="cpuLimit" class="form-label text-gold">Grid Search CPU Limit: <span id="cpuVal">{{ settings.cpu_usage_limit if settings else 80 }}</span>%</label>
+                    <div class="mb-4">
+                        <input type="range" class="form-range" min="10" max="100" step="5" id="cpuLimit" name="cpu_usage_limit" value="{{ settings.cpu_usage_limit if settings else 80 }}" oninput="document.getElementById('cpuVal').innerText = this.value">
+                        <div class="form-text">Lower this value if the backtest slows down your PC.</div>
+                    </div>
+
                     <label class="form-label mt-2">Evolution Lookback Period</label>
                     <div class="input-group mb-3">
                         <input type="number" name="evolution_lookback_value" class="form-control bg-dark text-white border-secondary" value="{{ settings.evolution_lookback_value }}" min="1">

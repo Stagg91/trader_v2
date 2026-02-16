@@ -57,6 +57,7 @@ def time_since(timestamp):
     diff = time.time() - timestamp
     return diff / 3600 # Hours
 templates.env.filters['time_since'] = time_since
+templates.env.filters['from_json'] = lambda x: json.loads(x) if x else {}
 
 # ... (Previous WebSocket) ...
 @app.websocket("/ws/lab_log")

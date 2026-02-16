@@ -126,7 +126,8 @@ db_url = f"sqlite:///{get_db_path()}"
 # print(f"DB URL: {db_url}")
 
 # Use NullPool to disable connection pooling for SQLite to prevent QueuePool limit errors
-engine = create_engine(db_url, connect_args={"check_same_thread": False}, poolclass=NullPool)
+# Increase timeout to 30s to reduce 'database is locked' errors
+engine = create_engine(db_url, connect_args={"check_same_thread": False, "timeout": 30}, poolclass=NullPool)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def seed_indicators(db):
@@ -178,6 +179,15 @@ def seed_indicators(db):
 
 def init_db():
     from sqlalchemy import inspect, text
+
+    # Enable Write-Ahead Logging (WAL) for better concurrency
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("PRAGMA journal_mode=WAL;"))
+            conn.commit()
+    except Exception as e:
+        print(f"Warning: Could not enable WAL mode: {e}")
+
     inspector = inspect(engine)
 
     # Basic migration hack: Check if 'strategies' table has 'code' column.
