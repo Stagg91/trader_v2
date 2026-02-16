@@ -149,6 +149,7 @@ class GridSearchRunner:
         """
         Main execution loop.
         """
+        print(f"DEBUG: Starting GridSearchRunner for Job {self.job_id}")
         db = SessionLocal()
         job = db.query(BacktestJob).filter(BacktestJob.id == self.job_id).first()
         if not job:
@@ -157,6 +158,10 @@ class GridSearchRunner:
             return
 
         try:
+            # Force status to running immediately
+            job.status = "running"
+            db.commit()
+
             strategy = db.query(Strategy).filter(Strategy.id == job.strategy_id).first()
             if not strategy or not strategy.content_json:
                 print("Invalid strategy.")

@@ -736,14 +736,28 @@ async def start_grid_backtest(request: Request, strategy_id: int = Form(...), db
     # Run in Thread to prevent blocking main loop with sync data fetching
     import threading
     def run_job(jid):
-        import asyncio
-        # Create a new event loop for this thread if needed for async logging/sleeping
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        try:
+            import asyncio
+            # Create a new event loop for this thread if needed for async logging/sleeping
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
-        runner = GridSearchRunner(jid)
-        loop.run_until_complete(runner.run())
-        loop.close()
+            runner = GridSearchRunner(jid)
+            loop.run_until_complete(runner.run())
+            loop.close()
+        except Exception as e:
+            print(f"Thread Crash for Job {jid}: {e}")
+            import traceback
+            traceback.print_exc()
+            # Try to fail job in DB
+            try:
+                db_err = SessionLocal()
+                j_err = db_err.query(BacktestJob).filter(BacktestJob.id == jid).first()
+                if j_err:
+                    j_err.status = "failed"
+                    db_err.commit()
+                db_err.close()
+            except: pass
 
     t = threading.Thread(target=run_job, args=(job.id,), daemon=True)
     t.start()
