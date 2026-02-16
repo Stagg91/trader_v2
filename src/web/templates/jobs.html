@@ -67,6 +67,13 @@
                                 <button type="submit" class="btn btn-sm btn-success">Resume</button>
                             </form>
                             {% endif %}
+
+                            {% if job.status in ['completed', 'cancelled', 'paused'] %}
+                            <form method="post" action="/backtest/control/{{ job.id }}" style="display:inline;" onsubmit="return confirm('Delete Job #{{ job.id }} and all its results?');">
+                                <input type="hidden" name="action" value="delete">
+                                <button type="submit" class="btn btn-sm btn-outline-danger ms-1"><i class="fa-solid fa-trash"></i></button>
+                            </form>
+                            {% endif %}
                         </div>
                     </td>
                 </tr>

@@ -732,9 +732,22 @@ async def start_grid_backtest(request: Request, strategy_id: int = Form(...), db
     job = BacktestJob(strategy_id=strategy_id, status="pending", started_at=time.time(), progress=0.0)
     db.add(job)
     db.commit()
-    import asyncio
-    runner = GridSearchRunner(job.id)
-    asyncio.create_task(runner.run())
+
+    # Run in Thread to prevent blocking main loop with sync data fetching
+    import threading
+    def run_job(jid):
+        import asyncio
+        # Create a new event loop for this thread if needed for async logging/sleeping
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        runner = GridSearchRunner(jid)
+        loop.run_until_complete(runner.run())
+        loop.close()
+
+    t = threading.Thread(target=run_job, args=(job.id,), daemon=True)
+    t.start()
+
     return RedirectResponse("/backtest/jobs", status_code=303)
 
 @app.get("/backtest/jobs", response_class=HTMLResponse)
@@ -757,6 +770,10 @@ async def control_job(job_id: int, action: str = Form(...), db: Session = Depend
         if action == "pause": job.status = "paused"
         elif action == "resume": job.status = "running"
         elif action == "cancel": job.status = "cancelled"
+        elif action == "delete":
+            # Delete associated results first
+            db.query(BacktestResult).filter(BacktestResult.job_id == job_id).delete()
+            db.delete(job)
         db.commit()
     return RedirectResponse("/backtest/jobs", status_code=303)
 
