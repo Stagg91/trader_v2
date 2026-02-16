@@ -1,0 +1,87 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-12">
+        <h2>Backtest Jobs</h2>
+        <p>Monitor running Grid Search jobs.</p>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <table class="table table-hover align-middle">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Strategy</th>
+                    <th>Status</th>
+                    <th>Progress</th>
+                    <th>Current Pair</th>
+                    <th>Started</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for job, strat in jobs %}
+                <tr>
+                    <td>{{ job.id }}</td>
+                    <td>{{ strat.name }}</td>
+                    <td>
+                        {% if job.status == 'running' %}
+                            <span class="badge bg-primary">Running</span>
+                        {% elif job.status == 'completed' %}
+                            <span class="badge bg-success">Completed</span>
+                        {% elif job.status == 'paused' %}
+                            <span class="badge bg-warning">Paused</span>
+                        {% elif job.status == 'cancelled' %}
+                            <span class="badge bg-secondary">Cancelled</span>
+                        {% else %}
+                            <span class="badge bg-light text-dark">{{ job.status }}</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="progress" style="height: 20px;">
+                            <div class="progress-bar" role="progressbar" style="width: {{ job.progress }}%;" aria-valuenow="{{ job.progress }}" aria-valuemin="0" aria-valuemax="100">{{ "%.1f"|format(job.progress) }}%</div>
+                        </div>
+                        <small class="text-muted">{{ job.current_param_set }}</small>
+                    </td>
+                    <td>{{ job.current_pair }}</td>
+                    <td>{{ job.started_at|time_since|round(1) }}h ago</td>
+                    <td>
+                        <div class="btn-group" role="group">
+                            <a href="/backtest/matrix/{{ job.id }}" class="btn btn-sm btn-info">Results</a>
+
+                            {% if job.status == 'running' %}
+                            <form method="post" action="/backtest/control/{{ job.id }}" style="display:inline;">
+                                <input type="hidden" name="action" value="pause">
+                                <button type="submit" class="btn btn-sm btn-warning">Pause</button>
+                            </form>
+                            <form method="post" action="/backtest/control/{{ job.id }}" style="display:inline;">
+                                <input type="hidden" name="action" value="cancel">
+                                <button type="submit" class="btn btn-sm btn-danger">Cancel</button>
+                            </form>
+                            {% elif job.status == 'paused' %}
+                            <form method="post" action="/backtest/control/{{ job.id }}" style="display:inline;">
+                                <input type="hidden" name="action" value="resume">
+                                <button type="submit" class="btn btn-sm btn-success">Resume</button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+    // Simple auto-refresh every 5 seconds if there are running jobs
+    {% if jobs|selectattr(0, "status", "equalto", "running")|list|length > 0 %}
+    setTimeout(function(){
+       location.reload();
+    }, 5000);
+    {% endif %}
+</script>
+{% endblock %}

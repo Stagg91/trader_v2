@@ -9,11 +9,12 @@ import json
 import numpy as np
 import time
 
-from src.database import SessionLocal, engine, Settings, init_db, User, Strategy, BacktestResult
+from src.database import SessionLocal, engine, Settings, init_db, User, Strategy, BacktestResult, IndicatorDef, BacktestJob
 from src.bybit_client import BybitClient
 from src.data_engine import DataEngine
 from src.indicators import IndicatorEngine
 from src.backtester import Backtester, combined_strategy
+from src.backtester_engine import GridSearchRunner
 from src.genetic_engine import GeneticBreeder
 from src.data_downloader import DataDownloader
 # Import ML Engine conditionally
@@ -101,19 +102,23 @@ async def auth_middleware(request: Request, call_next):
     if request.url.path in ["/login", "/setup", "/manifest.json", "/sw.js"] or request.url.path.startswith("/static"):
         return await call_next(request)
 
-    # Check if any user exists
-    db = SessionLocal()
-    user_count = db.query(User).count()
-    db.close()
-
-    if user_count == 0:
-         return RedirectResponse(url="/setup")
-
+    # OPTIMIZATION: Check Token First!
     token = request.cookies.get("access_token")
-    if not token or not decode_token(token):
-        return RedirectResponse(url="/login")
+    if token and decode_token(token):
+        # Valid user, let them pass without hitting DB for 'count'
+        return await call_next(request)
 
-    return await call_next(request)
+    # Check if any user exists (Only if not authenticated)
+    db = SessionLocal()
+    try:
+        user_count = db.query(User).count()
+        if user_count == 0:
+             return RedirectResponse(url="/setup")
+    finally:
+        db.close()
+
+    # If we are here: User exists (count > 0) but no valid token
+    return RedirectResponse(url="/login")
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
@@ -323,6 +328,7 @@ async def save_settings(
     evolution_lookback_value: int = Form(3),
     evolution_lookback_unit: str = Form("Months"),
     evolution_interval: int = Form(30),
+    cpu_usage_limit: int = Form(80),
     db: Session = Depends(get_db)
 ):
     settings = db.query(Settings).first()
@@ -341,6 +347,7 @@ async def save_settings(
     settings.evolution_lookback_value = evolution_lookback_value
     settings.evolution_lookback_unit = evolution_lookback_unit
     settings.evolution_interval = evolution_interval
+    settings.cpu_usage_limit = cpu_usage_limit
     db.commit()
 
     return templates.TemplateResponse("settings.html", {"request": request, "settings": settings, "message": "Saved!"})
@@ -1007,4 +1014,123 @@ async def lab_page(request: Request, db: Session = Depends(get_db)):
         "strategies": strategies,
         "max_gen": max_gen,
         "best_strat": best_strat
+    })
+
+# --- New Routes for Composite Strategies & Grid Search ---
+
+@app.get("/indicators", response_class=HTMLResponse)
+async def indicators_page(request: Request, db: Session = Depends(get_db)):
+    indicators = db.query(IndicatorDef).order_by(IndicatorDef.category, IndicatorDef.name).all()
+    # Parse JSON for template
+    for ind in indicators:
+        if isinstance(ind.optimization_config, str):
+            ind.optimization_config = json.loads(ind.optimization_config)
+    return templates.TemplateResponse("indicators.html", {"request": request, "indicators": indicators})
+
+@app.post("/indicators/update")
+async def update_indicator(
+    request: Request,
+    ind_id: int = Form(...),
+    opt_config: str = Form(...), # JSON string
+    db: Session = Depends(get_db)
+):
+    ind = db.query(IndicatorDef).filter(IndicatorDef.id == ind_id).first()
+    if ind:
+        try:
+            # Validate JSON
+            config = json.loads(opt_config)
+            ind.optimization_config = config # SQLAlchemy handles JSON type
+            db.commit()
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+    return RedirectResponse("/indicators", status_code=303)
+
+@app.get("/strategies/new", response_class=HTMLResponse)
+async def new_strategy_page(request: Request, db: Session = Depends(get_db)):
+    indicators = db.query(IndicatorDef).order_by(IndicatorDef.category, IndicatorDef.name).all()
+    return templates.TemplateResponse("create_strategy.html", {"request": request, "indicators": indicators})
+
+@app.post("/strategies/create_composite")
+async def create_composite_strategy(
+    request: Request,
+    name: str = Form(...),
+    description: str = Form(""),
+    selected_indicators: List[str] = Form(...), # List of names
+    db: Session = Depends(get_db)
+):
+    # Create Strategy
+    # content_json stores the list of selected indicators
+    content = {
+        "indicators": selected_indicators,
+        "logic_type": "AND" # Default
+    }
+
+    strat = Strategy(
+        name=name,
+        description=description,
+        type="composite",
+        content_json=content,
+        created_at=time.time(),
+        is_active=False
+    )
+    db.add(strat)
+    db.commit()
+
+    return RedirectResponse("/strategies", status_code=303)
+
+@app.post("/backtest/start_grid")
+async def start_grid_backtest(
+    request: Request,
+    strategy_id: int = Form(...),
+    db: Session = Depends(get_db)
+):
+    # Check if job already running?
+    # Create Job
+    job = BacktestJob(
+        strategy_id=strategy_id,
+        status="pending",
+        started_at=time.time(),
+        progress=0.0
+    )
+    db.add(job)
+    db.commit()
+
+    # Launch Background Task
+    import asyncio
+    runner = GridSearchRunner(job.id)
+    asyncio.create_task(runner.run())
+
+    return RedirectResponse("/backtest/jobs", status_code=303)
+
+@app.get("/backtest/jobs", response_class=HTMLResponse)
+async def jobs_page(request: Request, db: Session = Depends(get_db)):
+    jobs = db.query(BacktestJob, Strategy).join(Strategy, BacktestJob.strategy_id == Strategy.id).order_by(BacktestJob.started_at.desc()).all()
+    return templates.TemplateResponse("jobs.html", {"request": request, "jobs": jobs})
+
+@app.post("/backtest/control/{job_id}")
+async def control_job(job_id: int, action: str = Form(...), db: Session = Depends(get_db)):
+    job = db.query(BacktestJob).filter(BacktestJob.id == job_id).first()
+    if job:
+        if action == "pause":
+            job.status = "paused"
+        elif action == "resume":
+            job.status = "running"
+        elif action == "cancel":
+            job.status = "cancelled"
+        db.commit()
+    return RedirectResponse("/backtest/jobs", status_code=303)
+
+@app.get("/backtest/matrix/{job_id}", response_class=HTMLResponse)
+async def matrix_page(request: Request, job_id: int, db: Session = Depends(get_db)):
+    job = db.query(BacktestJob).filter(BacktestJob.id == job_id).first()
+    strategy = db.query(Strategy).filter(Strategy.id == job.strategy_id).first() if job else None
+
+    # Fetch Top Results
+    results = db.query(BacktestResult).filter(BacktestResult.job_id == job_id).order_by(BacktestResult.roi.desc()).limit(200).all()
+
+    return templates.TemplateResponse("matrix.html", {
+        "request": request,
+        "job": job,
+        "strategy": strategy,
+        "results": results
     })

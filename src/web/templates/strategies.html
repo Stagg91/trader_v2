@@ -120,6 +120,10 @@
              <button class="btn btn-warning" onclick="openBacktestModalFromDetail()">
                  <i class="fa-solid fa-play"></i> Run Backtest
              </button>
+             <form id="gridSearchForm" action="/backtest/start_grid" method="post" style="display:none;" class="ms-2">
+                 <input type="hidden" name="strategy_id" id="gridStratId">
+                 <button type="submit" class="btn btn-info"><i class="fa-solid fa-server"></i> Start Grid Job</button>
+             </form>
         </div>
       </div>
     </div>
@@ -265,6 +269,14 @@
                 } else {
                     document.getElementById('activateForm').style.display = 'inline';
                     document.getElementById('deactivateForm').style.display = 'none';
+                }
+
+                // Show Grid Search for Composite
+                if (data.type === 'composite') {
+                    document.getElementById('gridSearchForm').style.display = 'inline';
+                    document.getElementById('gridStratId').value = id;
+                } else {
+                    document.getElementById('gridSearchForm').style.display = 'none';
                 }
 
                 new bootstrap.Modal(document.getElementById('strategyModal')).show();

@@ -1,0 +1,89 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-12">
+        <h2>Strategy Matrix: {{ strategy.name }}</h2>
+        <p>Results for Job #{{ job.id }}. Showing Top 200.</p>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-sm table-striped table-hover" id="matrixTable">
+                <thead>
+                    <tr>
+                        <th style="cursor:pointer" onclick="sortTable(0)">Symbol</th>
+                        <th style="cursor:pointer" onclick="sortTable(1, true)">ROI %</th>
+                        <th style="cursor:pointer" onclick="sortTable(2, true)">Drawdown %</th>
+                        <th style="cursor:pointer" onclick="sortTable(3, true)">Trades</th>
+                        <th style="cursor:pointer" onclick="sortTable(4, true)">Win Rate %</th>
+                        <th style="cursor:pointer" onclick="sortTable(5, true)">Sharpe</th>
+                        <th>Params</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for res in results %}
+                    {% set metrics = res.metrics_json|from_json %}
+                    <tr>
+                        <td>{{ res.symbol }}</td>
+                        <td class="{{ 'text-success' if res.roi > 0 else 'text-danger' }}">
+                            {{ "%.2f"|format(res.roi) }}
+                        </td>
+                        <td class="text-danger">{{ "%.2f"|format(res.max_drawdown) }}</td>
+                        <td>{{ res.trades_count }}</td>
+                        <td>{{ "%.1f"|format(res.win_rate) }}</td>
+                        <td>{{ "%.2f"|format(res.sharpe) }}</td>
+                        <td><small>{{ metrics.params }}</small></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+function sortTable(n, isNum) {
+  var table, rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
+  table = document.getElementById("matrixTable");
+  switching = true;
+  dir = "desc"; // Default desc for ROI/metrics
+
+  while (switching) {
+    switching = false;
+    rows = table.rows;
+    for (i = 1; i < (rows.length - 1); i++) {
+      shouldSwitch = false;
+      x = rows[i].getElementsByTagName("TD")[n];
+      y = rows[i + 1].getElementsByTagName("TD")[n];
+
+      var valX = x.innerHTML.trim();
+      var valY = y.innerHTML.trim();
+
+      if (isNum) {
+          valX = parseFloat(valX.replace('%',''));
+          valY = parseFloat(valY.replace('%',''));
+      }
+
+      if (dir == "asc") {
+        if (valX > valY) { shouldSwitch = true; break; }
+      } else if (dir == "desc") {
+        if (valX < valY) { shouldSwitch = true; break; }
+      }
+    }
+    if (shouldSwitch) {
+      rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
+      switching = true;
+      switchcount ++;
+    } else {
+      if (switchcount == 0 && dir == "desc") {
+        dir = "asc";
+        switching = true;
+      }
+    }
+  }
+}
+</script>
+{% endblock %}
