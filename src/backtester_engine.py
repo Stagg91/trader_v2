@@ -239,6 +239,11 @@ class GridSearchRunner:
                     if delay > 0:
                         await asyncio.sleep(delay)
 
+                    # LOGGING: Emit progress log to LabLogger
+                    if current_count % 5 == 0:
+                        # Async log (fire and forget)
+                        asyncio.create_task(LabLogger.log("BACKTEST", f"Job #{self.job_id} | {symbol} | Combo: {combo}"))
+
                     # Construct Recipe
                     recipe_inds = []
                     entry_conds = []
@@ -305,6 +310,10 @@ class GridSearchRunner:
                         )
                         db.add(br)
                         db.commit()
+
+                        # LOGGING: Emit positive result
+                        if res['roi_percent'] > 0:
+                             asyncio.create_task(LabLogger.log("BACKTEST", f"Job #{self.job_id} HIT: {symbol} | ROI {res['roi_percent']:.2f}% | Params: {combo}"))
 
                     current_count += 1
 

@@ -4,9 +4,17 @@
 <div class="container mt-4">
     <div class="d-flex justify-content-between align-items-center mb-4">
         <h2><i class="fa-solid fa-flask text-gold"></i> Strategy Library</h2>
-        <button class="btn btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#generatePanel">
-            <i class="fa-solid fa-plus"></i> New Strategy
-        </button>
+        <div>
+            <a href="/strategies?view_all={{ 'false' if view_all else 'true' }}" class="btn btn-outline-info me-2">
+                {% if view_all %}Show Top 20{% else %}Show All{% endif %}
+            </a>
+            <button class="btn btn-secondary me-2" data-bs-toggle="modal" data-bs-target="#importModal">
+                <i class="fa-solid fa-file-import"></i> Import
+            </button>
+            <button class="btn btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#generatePanel">
+                <i class="fa-solid fa-plus"></i> New Strategy
+            </button>
+        </div>
     </div>
 
     <!-- Generator Panel -->
@@ -34,7 +42,7 @@
         <div class="col-12">
             <div class="card bg-dark border-secondary">
                 <div class="card-header border-secondary">
-                    <i class="fa-solid fa-chart-scatter"></i> Strategy Performance Matrix (All Backtested)
+                    <i class="fa-solid fa-chart-scatter"></i> Strategy Performance Matrix ({{ 'All' if view_all else 'Top 20' }})
                 </div>
                 <div class="card-body p-0">
                     <div id="performanceMatrix" style="width:100%;height:500px;"></div>
@@ -47,51 +55,86 @@
         </div>
     </div>
 
-    <!-- Top 20 Leaderboard -->
-    <h3>Top 20 Leaderboard</h3>
-    <div class="table-responsive">
-        <table class="table table-dark table-hover align-middle">
-            <thead>
-                <tr>
-                    <th>Rank</th>
-                    <th>Strategy Name</th>
-                    <th>Gen</th>
-                    <th>Avg ROI</th>
-                    <th>Avg Win Rate</th>
-                    <th>Avg Drawdown</th>
-                    <th>Last Result</th>
-                    <th>Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for item in leaderboard %}
-                <tr>
-                    <td><span class="badge bg-secondary">#{{ loop.index }}</span></td>
-                    <td class="fw-bold text-gold">{{ item.strategy.name }}</td>
-                    <td><span class="badge bg-dark border border-secondary">{{ item.strategy.generation }}</span></td>
-                    <td class="{{ 'text-success' if item.roi > 0 else 'text-danger' }}">{{ "%.2f"|format(item.roi) }}%</td>
-                    <td>{{ "%.1f"|format(item.win_rate) }}%</td>
-                    <td class="text-danger">{{ "%.2f"|format(item.max_drawdown) }}%</td>
-                    <td>
-                        {% if item.last_result_id %}
-                            <a href="/backtest/result/{{ item.last_result_id }}" class="badge bg-info text-decoration-none">
-                                <i class="fa-solid fa-chart-line"></i> View
-                            </a>
-                        {% else %}
-                            <span class="text-muted small">N/A</span>
-                        {% endif %}
-                    </td>
-                    <td>
-                        <button class="btn btn-sm btn-outline-info" onclick="openStrategyModal('{{ item.strategy.id }}')">
-                            <i class="fa-solid fa-eye"></i> Details
-                        </button>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
+    <!-- Bulk Actions Form -->
+    <form id="bulkForm" method="post">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h3>{{ 'All Strategies' if view_all else 'Top 20 Leaderboard' }}</h3>
+            <div>
+                <button type="submit" formaction="/strategies/export" class="btn btn-sm btn-info me-2"><i class="fa-solid fa-download"></i> Export Selected</button>
+                <button type="submit" formaction="/strategies/delete" class="btn btn-sm btn-danger" onclick="return confirm('Are you sure you want to delete selected strategies?');"><i class="fa-solid fa-trash"></i> Delete Selected</button>
+            </div>
+        </div>
 
+        <div class="table-responsive">
+            <table class="table table-dark table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th style="width: 40px;"><input type="checkbox" id="selectAll" class="form-check-input"></th>
+                        <th>Rank</th>
+                        <th>Strategy Name</th>
+                        <th>Gen</th>
+                        <th>Avg ROI</th>
+                        <th>Avg Win Rate</th>
+                        <th>Avg Drawdown</th>
+                        <th>Last Result</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in leaderboard %}
+                    <tr>
+                        <td><input type="checkbox" name="strategy_ids" value="{{ item.strategy.id }}" class="form-check-input strat-check"></td>
+                        <td><span class="badge bg-secondary">#{{ loop.index }}</span></td>
+                        <td class="fw-bold text-gold">{{ item.strategy.name }}</td>
+                        <td><span class="badge bg-dark border border-secondary">{{ item.strategy.generation }}</span></td>
+                        <td class="{{ 'text-success' if item.roi > 0 else 'text-danger' }}">{{ "%.2f"|format(item.roi) }}%</td>
+                        <td>{{ "%.1f"|format(item.win_rate) }}%</td>
+                        <td class="text-danger">{{ "%.2f"|format(item.max_drawdown) }}%</td>
+                        <td>
+                            {% if item.last_result_id %}
+                                <a href="/backtest/result/{{ item.last_result_id }}" class="badge bg-info text-decoration-none">
+                                    <i class="fa-solid fa-chart-line"></i> View
+                                </a>
+                            {% else %}
+                                <span class="text-muted small">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <button type="button" class="btn btn-sm btn-outline-info" onclick="openStrategyModal('{{ item.strategy.id }}')">
+                                <i class="fa-solid fa-eye"></i> Details
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </form>
+
+</div>
+
+<!-- Import Modal -->
+<div class="modal fade" id="importModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content bg-dark text-white border-gold">
+      <form action="/strategies/import" method="post" enctype="multipart/form-data">
+          <div class="modal-header border-secondary">
+            <h5 class="modal-title">Import Strategies</h5>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-3">
+                <label for="importFile" class="form-label">Select JSON File</label>
+                <input class="form-control bg-black text-white" type="file" id="importFile" name="file" accept=".json" required>
+            </div>
+          </div>
+          <div class="modal-footer border-secondary">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            <button type="submit" class="btn btn-gold">Import</button>
+          </div>
+      </form>
+    </div>
+  </div>
 </div>
 
 <!-- Strategy Detail Modal -->
@@ -117,13 +160,16 @@
                     <button type="submit" class="btn btn-danger"><i class="fa-solid fa-stop"></i> Deactivate</button>
                 </form>
              </div>
-             <button class="btn btn-warning" onclick="openBacktestModalFromDetail()">
-                 <i class="fa-solid fa-play"></i> Run Backtest
-             </button>
-             <form id="gridSearchForm" action="/backtest/start_grid" method="post" style="display:none;" class="ms-2">
-                 <input type="hidden" name="strategy_id" id="gridStratId">
-                 <button type="submit" class="btn btn-info"><i class="fa-solid fa-server"></i> Start Grid Job</button>
-             </form>
+             <div>
+                 <button class="btn btn-warning me-2" onclick="openBacktestModalFromDetail()">
+                     <i class="fa-solid fa-play"></i> Quick Test
+                 </button>
+                 <!-- Always visible button for Grid Search, JS handles alerting for legacy -->
+                 <form id="gridSearchForm" action="/backtest/start_grid" method="post" style="display:inline;">
+                     <input type="hidden" name="strategy_id" id="gridStratId">
+                     <button type="button" id="btnGridSearch" class="btn btn-info"><i class="fa-solid fa-server"></i> Optimize (Grid)</button>
+                 </form>
+             </div>
         </div>
       </div>
     </div>
@@ -235,9 +281,18 @@
         openStrategyModal(stratId);
     });
 
-    // --- 3. Modal Logic ---
+    // --- 3. Checkbox Logic ---
+    document.getElementById('selectAll').onclick = function() {
+        var checkboxes = document.querySelectorAll('.strat-check');
+        for (var checkbox of checkboxes) {
+            checkbox.checked = this.checked;
+        }
+    };
+
+    // --- 4. Modal Logic ---
     let currentStratId = null;
     let currentStratName = "";
+    let currentStratType = "";
 
     function openStrategyModal(id) {
         currentStratId = id;
@@ -246,6 +301,7 @@
             .then(r => r.json())
             .then(data => {
                 currentStratName = data.name;
+                currentStratType = data.type;
                 document.getElementById('modalStratTitle').innerText = data.name;
 
                 let html = `
@@ -262,6 +318,7 @@
                 // Update Actions
                 document.getElementById('activateForm').action = `/strategies/activate/${id}`;
                 document.getElementById('deactivateForm').action = `/strategies/deactivate/${id}`;
+                document.getElementById('gridStratId').value = id;
 
                 if(data.is_active) {
                     document.getElementById('activateForm').style.display = 'none';
@@ -271,14 +328,6 @@
                     document.getElementById('deactivateForm').style.display = 'none';
                 }
 
-                // Show Grid Search for Composite
-                if (data.type === 'composite') {
-                    document.getElementById('gridSearchForm').style.display = 'inline';
-                    document.getElementById('gridStratId').value = id;
-                } else {
-                    document.getElementById('gridSearchForm').style.display = 'none';
-                }
-
                 new bootstrap.Modal(document.getElementById('strategyModal')).show();
             })
             .catch(e => {
@@ -286,6 +335,15 @@
                 alert("Error loading strategy details.");
             });
     }
+
+    // Grid Search Button Handler
+    document.getElementById('btnGridSearch').onclick = function() {
+        if (currentStratType !== 'composite') {
+            alert("NOTE: Automatic Grid Search is fully supported for Composite strategies. For Legacy/AI strategies, the system cannot automatically detect parameter ranges from the code. The job will run but might default to a single pass unless converted.");
+        }
+        // Submit the form
+        document.getElementById('gridSearchForm').submit();
+    };
 
     function openBacktestModalFromDetail() {
         // Close detail modal
