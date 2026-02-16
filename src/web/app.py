@@ -427,7 +427,7 @@ async def run_backtest(request: Request, symbol: str = Form(...), initial_balanc
 # --- UPDATED STRATEGIES PAGE (View All, Export, Import) ---
 
 @app.get("/strategies", response_class=HTMLResponse)
-async def strategies_page(request: Request, view_all: bool = False, db: Session = Depends(get_db)):
+async def strategies_page(request: Request, view_all: bool = True, db: Session = Depends(get_db)):
     # 1. Fetch All Strategies
     all_strats = db.query(Strategy).all()
 
