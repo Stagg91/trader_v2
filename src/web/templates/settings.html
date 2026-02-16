@@ -60,6 +60,12 @@
                         <div class="form-text">Lower this value if the backtest slows down your PC.</div>
                     </div>
 
+                    <label for="gridDays" class="form-label text-gold">Grid Search Data Lookback (Days)</label>
+                    <div class="form-floating mb-3">
+                        <input type="number" name="grid_search_days" class="form-control bg-dark text-white border-secondary" id="gridDays" value="{{ settings.grid_search_days if settings else 30 }}" min="1" max="365">
+                        <label for="gridDays">Days of history to test against</label>
+                    </div>
+
                     <label class="form-label mt-2">Evolution Lookback Period</label>
                     <div class="input-group mb-3">
                         <input type="number" name="evolution_lookback_value" class="form-control bg-dark text-white border-secondary" value="{{ settings.evolution_lookback_value }}" min="1">

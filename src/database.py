@@ -20,6 +20,7 @@ class Settings(Base):
     evolution_lookback_unit = Column(String, default="Months")
     evolution_interval = Column(Integer, default=30) # Minutes
     cpu_usage_limit = Column(Integer, default=80) # Percentage max CPU
+    grid_search_days = Column(Integer, default=30) # Days of data for Grid Search
 
 class User(Base):
     __tablename__ = 'users'
@@ -226,6 +227,16 @@ def init_db():
              with engine.connect() as conn:
                 try:
                     conn.execute(text("ALTER TABLE strategies ADD COLUMN description VARCHAR DEFAULT NULL"))
+                    conn.commit()
+                except Exception as e:
+                     print(f"Migration Error: {e}")
+
+        # Check for grid_search_days
+        if "grid_search_days" not in columns:
+             print("Migrating settings table: adding grid_search_days...")
+             with engine.connect() as conn:
+                try:
+                    conn.execute(text("ALTER TABLE settings ADD COLUMN grid_search_days INTEGER DEFAULT 30"))
                     conn.commit()
                 except Exception as e:
                      print(f"Migration Error: {e}")

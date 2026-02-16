@@ -208,8 +208,18 @@ class GridSearchRunner:
             # Load Data
             from src.data_engine import DataEngine
             de = DataEngine()
-            # Fallback symbols
+            # Fallback symbols (Ideally fetch from active pairs)
             symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT"]
+
+            # Determine Lookback
+            settings = db.query(Settings).first()
+            days = settings.grid_search_days if settings and settings.grid_search_days else 30
+
+            # Calculate Limit/Start Time
+            # fetch_ohlcv supports start_time in ms.
+            # If we want 'days' back from now:
+            now_ms = int(time.time() * 1000)
+            start_ms = now_ms - (days * 24 * 60 * 60 * 1000)
 
             # Update Job Status
             job.status = "running"
@@ -230,9 +240,14 @@ class GridSearchRunner:
 
             # Loop Pairs
             for symbol in symbols:
-                # Load Data Once per pair
-                df = de.fetch_ohlcv(symbol, interval="60", limit=1000)
-                if df.empty: continue
+                # Load Data Once per pair using dynamic lookback
+                # Increase limit if using start_ms, or just pass start_time
+                asyncio.create_task(LabLogger.log("BACKTEST", f"Fetching {days} days data for {symbol}..."))
+                df = de.fetch_ohlcv(symbol, interval="60", limit=200000, start_time=start_ms)
+
+                if df.empty:
+                    asyncio.create_task(LabLogger.log("BACKTEST", f"No data for {symbol}"))
+                    continue
 
                 # Loop Combinations
                 for combo in itertools.product(*param_ranges):
@@ -299,7 +314,8 @@ class GridSearchRunner:
                     bt = Backtester(df, initial_balance=10000)
                     res = bt.run_vectorized_backtest(recipe)
 
-                    if res and res.get('total_trades', 0) > 0:
+                    # Save result regardless of trades (show 0 dots)
+                    if res:
                         safe_metrics = {
                             "roi": res['roi_percent'],
                             "dd": res['max_drawdown'],

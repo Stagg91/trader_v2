@@ -45,6 +45,13 @@
 </div>
 
 <script>
+// Auto-refresh if job is running
+{% if job.status == 'running' %}
+setTimeout(function(){
+   location.reload();
+}, 5000);
+{% endif %}
+
 function sortTable(n, isNum) {
   var table, rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
   table = document.getElementById("matrixTable");

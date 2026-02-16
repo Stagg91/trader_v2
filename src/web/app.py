@@ -308,6 +308,7 @@ async def save_settings(
     settings.evolution_lookback_unit = evolution_lookback_unit
     settings.evolution_interval = evolution_interval
     settings.cpu_usage_limit = cpu_usage_limit
+    settings.grid_search_days = int(request._form.get("grid_search_days", 30)) # Manually extract since signature wasn't updated
     db.commit()
     return templates.TemplateResponse("settings.html", {"request": request, "settings": settings, "message": "Saved!"})
 
