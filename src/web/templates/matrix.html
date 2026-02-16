@@ -8,6 +8,11 @@
     </div>
 </div>
 
+<!-- Scatter Plots Container -->
+<div id="matrixCharts" class="row mb-5">
+    <!-- Charts will be injected here -->
+</div>
+
 <div class="card">
     <div class="card-body">
         <div class="table-responsive">
@@ -26,7 +31,12 @@
                 <tbody>
                     {% for res in results %}
                     {% set metrics = res.metrics_json|from_json %}
-                    <tr>
+                    <tr class="result-row"
+                        data-symbol="{{ res.symbol }}"
+                        data-roi="{{ res.roi }}"
+                        data-dd="{{ res.max_drawdown }}"
+                        data-trades="{{ res.trades_count }}"
+                        data-params='{{ metrics.params|tojson }}'>
                         <td>{{ res.symbol }}</td>
                         <td class="{{ 'text-success' if res.roi > 0 else 'text-danger' }}">
                             {{ "%.2f"|format(res.roi) }}
@@ -44,6 +54,9 @@
     </div>
 </div>
 
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
 <script>
 // Auto-refresh if job is running
 {% if job.status == 'running' %}
@@ -51,6 +64,130 @@ setTimeout(function(){
    location.reload();
 }, 5000);
 {% endif %}
+
+document.addEventListener("DOMContentLoaded", function() {
+    initCharts();
+});
+
+function initCharts() {
+    const rows = document.querySelectorAll('.result-row');
+    const dataBySymbol = {};
+
+    rows.forEach(row => {
+        const symbol = row.dataset.symbol;
+        const roi = parseFloat(row.dataset.roi);
+        const dd = parseFloat(row.dataset.dd); // Usually negative or positive depending on implementation.
+        // In this app, dd is usually positive (e.g. 15.0 for 15% drawdown). Let's check visually.
+        // Assuming positive values for DD based on table display.
+        const params = row.dataset.params;
+
+        if (!dataBySymbol[symbol]) {
+            dataBySymbol[symbol] = [];
+        }
+
+        dataBySymbol[symbol].push({
+            x: dd,
+            y: roi,
+            rawParams: params
+        });
+    });
+
+    const container = document.getElementById('matrixCharts');
+
+    // Define some colors for variety if needed, or stick to theme
+    const chartColor = 'rgba(75, 192, 192, 0.6)';
+
+    Object.keys(dataBySymbol).forEach((symbol, index) => {
+        // Create Column
+        const colDiv = document.createElement('div');
+        colDiv.className = "col-md-6 mb-4";
+
+        // Create Card
+        const card = document.createElement('div');
+        card.className = "card h-100 bg-dark border-secondary";
+
+        const cardHeader = document.createElement('div');
+        cardHeader.className = "card-header text-gold";
+        cardHeader.innerHTML = `<i class="fa-solid fa-chart-scatter"></i> ${symbol} - ROI vs Risk`;
+
+        const cardBody = document.createElement('div');
+        cardBody.className = "card-body";
+
+        const canvas = document.createElement('canvas');
+        canvas.id = `chart-${symbol}`;
+
+        cardBody.appendChild(canvas);
+        card.appendChild(cardHeader);
+        card.appendChild(cardBody);
+        colDiv.appendChild(card);
+        container.appendChild(colDiv);
+
+        // Render Chart
+        const ctx = canvas.getContext('2d');
+        new Chart(ctx, {
+            type: 'scatter',
+            data: {
+                datasets: [{
+                    label: 'Strategy Result',
+                    data: dataBySymbol[symbol],
+                    backgroundColor: function(context) {
+                        const val = context.raw?.y;
+                        return val >= 0 ? 'rgba(0, 255, 0, 0.6)' : 'rgba(255, 99, 132, 0.6)';
+                    },
+                    borderColor: 'rgba(255, 255, 255, 0.8)',
+                    borderWidth: 1,
+                    pointRadius: 5,
+                    pointHoverRadius: 8
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const pt = context.raw;
+                                return `ROI: ${pt.y.toFixed(2)}% | DD: ${pt.x.toFixed(2)}%`;
+                            },
+                            afterLabel: function(context) {
+                                const pt = context.raw;
+                                // Truncate params if too long
+                                let p = pt.rawParams;
+                                if(p.length > 50) p = p.substring(0, 50) + "...";
+                                return `Params: ${p}`;
+                            }
+                        }
+                    },
+                    legend: {
+                        display: false
+                    }
+                },
+                scales: {
+                    x: {
+                        type: 'linear',
+                        position: 'bottom',
+                        title: {
+                            display: true,
+                            text: 'Max Drawdown (%)',
+                            color: '#aaa'
+                        },
+                        grid: { color: '#333' },
+                        ticks: { color: '#ddd' }
+                    },
+                    y: {
+                        title: {
+                            display: true,
+                            text: 'ROI (%)',
+                            color: '#aaa'
+                        },
+                        grid: { color: '#333' },
+                        ticks: { color: '#ddd' }
+                    }
+                }
+            }
+        });
+    });
+}
 
 function sortTable(n, isNum) {
   var table, rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
