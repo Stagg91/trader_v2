@@ -5,6 +5,7 @@ import time
 import json
 import itertools
 import traceback
+import random
 from sqlalchemy.orm import Session
 from src.database import SessionLocal, BacktestJob, BacktestResult, Strategy, IndicatorDef, Settings
 from src.backtester import Backtester
@@ -16,10 +17,6 @@ import multiprocessing
 class StandardStrategyLogic:
     @staticmethod
     def get_logic(indicator_name, params, col_prefix=None):
-        """
-        Returns (entry_logic, exit_logic) strings for a given indicator and params.
-        col_prefix: If provided, use this prefix for columns (e.g. 'RSI_14').
-        """
         name = indicator_name.lower()
         base = col_prefix if col_prefix else name.upper()
 
@@ -27,7 +24,6 @@ class StandardStrategyLogic:
         exit = ""
 
         if name == 'rsi':
-            # Default Mean Reversion / Oversold
             entry = f"{base} < 30"
             exit = f"{base} > 70"
 
@@ -189,15 +185,77 @@ class GridSearchRunner:
         self.job_id = job_id
         self.should_stop = False
 
+    def _generate_random_individual(self, indicators_defs):
+        """Generates a random parameter set for the given indicators."""
+        individual = []
+        for ind_def in indicators_defs:
+            params = {}
+            for p_name, p_cfg in ind_def['optimization_config'].items():
+                start = p_cfg.get('start', 10)
+                stop = p_cfg.get('stop', 20)
+                step = p_cfg.get('step', 1)
+
+                # Random choice within range
+                # Use int/float based on default type
+                default_val = ind_def['default_params'].get(p_name)
+                is_int = isinstance(default_val, int)
+
+                # Generate valid steps
+                valid_values = list(np.arange(start, stop + step, step))
+                if is_int:
+                    valid_values = [int(x) for x in valid_values]
+                else:
+                    valid_values = [float(x) for x in valid_values]
+
+                val = random.choice(valid_values)
+                params[p_name] = val
+            individual.append(params)
+        return tuple(individual) # Tuple for hashability if needed
+
+    def _mutate_individual(self, individual, indicators_defs, mutation_rate=0.2):
+        """Mutates an individual slightly."""
+        new_ind = list(individual)
+        for i, params in enumerate(new_ind):
+            if random.random() < mutation_rate:
+                # Mutate params for this indicator
+                ind_def = indicators_defs[i]
+                new_params = params.copy()
+
+                # Pick one param to change
+                p_name = random.choice(list(params.keys()))
+                p_cfg = ind_def['optimization_config'].get(p_name)
+                if p_cfg:
+                    start = p_cfg.get('start', 10)
+                    stop = p_cfg.get('stop', 20)
+                    step = p_cfg.get('step', 1)
+
+                    current_val = params[p_name]
+                    # +/- step
+                    delta = random.choice([-step, step])
+                    new_val = current_val + delta
+
+                    # Clamp
+                    new_val = max(start, min(stop, new_val))
+
+                    # Type check
+                    default_val = ind_def['default_params'].get(p_name)
+                    if isinstance(default_val, int):
+                        new_val = int(new_val)
+                    else:
+                        new_val = float(new_val)
+
+                    new_params[p_name] = new_val
+                new_ind[i] = new_params
+        return tuple(new_ind)
+
     async def run(self):
         """
-        Main execution loop with Multiprocessing.
+        Main execution loop. Switches between Grid Search and Genetic Algorithm based on size.
         """
-        print(f"DEBUG: Starting GridSearchRunner (MultiProc) for Job {self.job_id}")
+        print(f"DEBUG: Starting GridSearchRunner for Job {self.job_id}")
         db = SessionLocal()
         job = db.query(BacktestJob).filter(BacktestJob.id == self.job_id).first()
         if not job:
-            print(f"Job {self.job_id} not found.")
             db.close()
             return
 
@@ -212,8 +270,9 @@ class GridSearchRunner:
 
             selected_names = strategy.content_json.get('indicators', [])
 
+            # 1. Fetch Definitions
             indicators_defs = []
-            param_ranges = []
+            param_ranges = [] # For grid search
 
             for name in selected_names:
                 ind_def = db.query(IndicatorDef).filter(IndicatorDef.name == name).first()
@@ -224,6 +283,7 @@ class GridSearchRunner:
                         "optimization_config": ind_def.optimization_config
                     })
 
+                    # For Grid Search Calculation
                     keys = []
                     lists = []
                     for p_name, p_cfg in ind_def.optimization_config.items():
@@ -245,6 +305,7 @@ class GridSearchRunner:
                         ind_combinations.append(param_dict)
                     param_ranges.append(ind_combinations)
 
+            # 2. Determine Scope
             from src.data_engine import DataEngine
             de = DataEngine()
             symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT"]
@@ -256,15 +317,20 @@ class GridSearchRunner:
             total_cores = multiprocessing.cpu_count()
             max_workers = max(1, int(total_cores * (cpu_limit / 100.0)))
 
-            # Calculate Total
+            # Calculate Total Size
             combinations_per_symbol = 1
             for r in param_ranges:
                 combinations_per_symbol *= len(r)
 
             raw_total = len(symbols) * float(combinations_per_symbol)
-            max_int = 2147483647
-            if raw_total > max_int:
-                total_combos = max_int
+            LIMIT_FOR_GRID = 10000000 # 10 Million
+
+            use_genetic = False
+            if raw_total > LIMIT_FOR_GRID:
+                use_genetic = True
+                asyncio.create_task(LabLogger.log("BACKTEST", f"Warning: Combination count {raw_total:.2e} exceeds limit. Switching to Genetic Optimization."))
+                # Cap progress bar for GA
+                total_combos = 5000 * len(symbols) # e.g. 50 gens * 100 pop
             else:
                 total_combos = int(raw_total)
 
@@ -272,95 +338,210 @@ class GridSearchRunner:
             job.started_at = time.time()
             db.commit()
 
-            current_count = 0
+            # 3. Execution Logic
 
             # Helper to chunk list
             def chunker(seq, size):
                 return (seq[pos:pos + size] for pos in range(0, len(seq), size))
 
-            # If all_combos is huge, we should generate it more smartly, but list(product) is okay for <10M usually.
-            # If >10M, we need to iterate product directly and chunk manually.
-            # For robustness, let's assume <10M.
-            if combinations_per_symbol > 10000000:
-                asyncio.create_task(LabLogger.log("BACKTEST", f"Warning: Combination count {combinations_per_symbol} is massive. Might use high RAM."))
-
-            all_combos = list(itertools.product(*param_ranges))
-            chunk_size = 500
+            # Loop Pairs
+            current_count = 0
 
             for symbol in symbols:
                 db.refresh(job)
                 if job.status == 'cancelled': return
 
-                asyncio.create_task(LabLogger.log("BACKTEST", f"Fetching {days} days data for {symbol}..."))
+                asyncio.create_task(LabLogger.log("BACKTEST", f"Processing {symbol}..."))
 
+                # Fetch Data
                 now_ms = int(time.time() * 1000)
                 start_ms = now_ms - (days * 24 * 60 * 60 * 1000)
                 df = de.fetch_ohlcv(symbol, interval="60", limit=200000, start_time=start_ms)
-
                 if df.empty: continue
 
-                with ProcessPoolExecutor(max_workers=max_workers) as executor:
-                    futures = []
+                # === GENETIC ALGORITHM PATH ===
+                if use_genetic:
+                    POP_SIZE = 100
+                    GENERATIONS = 20 # 2000 evals per symbol
 
-                    for chunk in chunker(all_combos, chunk_size):
+                    # Init Population (Random)
+                    population = [self._generate_random_individual(indicators_defs) for _ in range(POP_SIZE)]
+
+                    for gen in range(GENERATIONS):
                         db.refresh(job)
-                        if job.status == 'cancelled':
-                            executor.shutdown(wait=False)
-                            return
-                        while job.status == 'paused':
-                            await asyncio.sleep(5)
-                            db.refresh(job)
+                        if job.status in ['cancelled', 'paused']:
+                             if job.status == 'cancelled': return
+                             while job.status == 'paused': await asyncio.sleep(5); db.refresh(job)
 
-                        future = executor.submit(worker_task, df, chunk, indicators_defs)
-                        futures.append(future)
+                        asyncio.create_task(LabLogger.log("BACKTEST", f"GA Gen {gen+1}/{GENERATIONS} | Pop: {len(population)}"))
 
-                    # Process completed chunks
-                    for future in as_completed(futures):
-                        try:
-                            chunk_results = future.result()
-                            if chunk_results:
-                                db_objects = []
-                                for r in chunk_results:
-                                    br = BacktestResult(
-                                        strategy_id=job.strategy_id,
-                                        job_id=job.id,
-                                        symbol=symbol,
-                                        roi=r['roi'],
-                                        sharpe=r['sharpe'],
-                                        max_drawdown=r['max_drawdown'],
-                                        win_rate=r['win_rate'],
-                                        trades_count=r['trades_count'],
-                                        metrics_json=r['metrics_json'],
-                                        start_date=r['start_date'],
-                                        end_date=r['end_date'],
-                                        timestamp=time.time()
-                                    )
-                                    db_objects.append(br)
+                        # Evaluate Population (Parallel)
+                        chunk_size = 50 # Half pop
+                        fitness_scores = [] # (ind, roi)
 
-                                if db_objects:
-                                    db.bulk_save_objects(db_objects)
-                                    db.commit()
+                        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                            futures = []
+                            for chunk in chunker(population, chunk_size):
+                                future = executor.submit(worker_task, df, chunk, indicators_defs)
+                                futures.append(future)
 
-                                current_count += len(chunk_results)
+                            for future in as_completed(futures):
+                                try:
+                                    res_list = future.result()
+                                    if res_list:
+                                        # Save Results
+                                        db_objects = []
+                                        for r in res_list:
+                                            # Reconstruct individual from r['combo'] if needed, or just use r['roi']
+                                            # We need to map back to original individual for breeding?
+                                            # worker_task returns 'combo'. This is our individual.
+                                            ind = r['combo']
+                                            roi = r['roi']
+                                            dd = r['max_drawdown']
+                                            fitness = roi - (dd * 0.5) # Simple fitness function
 
-                                # Update UI progress every ~5000 iterations to avoid DB lock spam
-                                if current_count % (chunk_size * 10) == 0:
-                                    job.progress = min(100.0, (current_count / total_combos) * 100)
-                                    job.current_pair = symbol
-                                    # job.current_iteration = current_count (Assuming model has this, else skip)
-                                    # Just progress % is sufficient for now based on user request "completed x of y"
-                                    # We can calc completed in template if we save current_count?
-                                    # Actually, job.progress is float.
-                                    # Let's verify BacktestJob model. It doesn't have 'current_iteration'.
-                                    # I should add it or just use progress %.
-                                    # Wait, user asked for "completed x of y".
-                                    # I can abuse 'current_param_set' to store JSON count? Or just rely on progress %.
-                                    # Let's stick to progress % update for now.
-                                    db.commit()
+                                            fitness_scores.append((ind, fitness))
 
-                        except Exception as e:
-                            print(f"Chunk Error: {e}")
-                            traceback.print_exc()
+                                            br = BacktestResult(
+                                                strategy_id=job.strategy_id, job_id=job.id, symbol=symbol,
+                                                roi=roi, sharpe=r['sharpe'], max_drawdown=dd, win_rate=r['win_rate'],
+                                                trades_count=r['trades_count'], metrics_json=r['metrics_json'],
+                                                start_date=r['start_date'], end_date=r['end_date'], timestamp=time.time()
+                                            )
+                                            db_objects.append(br)
+
+                                        if db_objects:
+                                            db.bulk_save_objects(db_objects)
+                                            db.commit()
+
+                                        current_count += len(res_list)
+
+                                except Exception as e:
+                                    traceback.print_exc()
+
+                        # Selection (Elitism + Roulette?)
+                        # Sort by fitness desc
+                        fitness_scores.sort(key=lambda x: x[1], reverse=True)
+                        top_performers = [x[0] for x in fitness_scores[:int(POP_SIZE * 0.2)]] # Top 20%
+
+                        if not top_performers:
+                            # Re-seed if all failed
+                            top_performers = [self._generate_random_individual(indicators_defs) for _ in range(10)]
+
+                        # Breeding (Crossover + Mutation)
+                        new_pop = list(top_performers) # Elitism
+
+                        while len(new_pop) < POP_SIZE:
+                            parent = random.choice(top_performers)
+                            child = self._mutate_individual(parent, indicators_defs, mutation_rate=0.3)
+                            new_pop.append(child)
+
+                        population = new_pop
+
+                        # Update Progress
+                        job.progress = min(100.0, (current_count / total_combos) * 100)
+                        job.current_pair = f"{symbol} (Gen {gen})"
+                        db.commit()
+
+                # === GRID SEARCH PATH ===
+                else:
+                    # Use itertools.product directly with chunking to avoid huge list in memory
+                    # Problem: We can't slice a product object easily.
+                    # Solution: Helper generator that chunks the product iterator.
+
+                    product_iter = itertools.product(*param_ranges)
+
+                    # Custom chunker for iterator
+                    def iter_chunker(iterable, size):
+                        it = iter(iterable)
+                        while True:
+                            chunk = list(itertools.islice(it, size))
+                            if not chunk:
+                                break
+                            yield chunk
+
+                    chunk_size = 500
+
+                    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                        futures = []
+                        # Limit pending futures to avoid memory bloat
+                        MAX_PENDING_FUTURES = max_workers * 2
+
+                        chunk_gen = iter_chunker(product_iter, chunk_size)
+
+                        # Initial fill
+                        for _ in range(MAX_PENDING_FUTURES):
+                            try:
+                                chunk = next(chunk_gen)
+                                future = executor.submit(worker_task, df, chunk, indicators_defs)
+                                futures.append(future)
+                            except StopIteration:
+                                break
+
+                        while futures:
+                            # Wait for at least one to complete
+                            # Ideally we use as_completed but we want to refill continuously
+                            # Simple approach: Wait for first completed, process, submit next
+                            # Actually, as_completed yields futures as they finish.
+
+                            # Let's use a set for active futures
+                            active_futures = set(futures)
+                            completed_futures = []
+
+                            # Wait for ONE result
+                            done, not_done = multiprocessing.connection.wait(active_futures, timeout=0.1) # Wait logic?
+                            # concurrent.futures.wait is better
+                            from concurrent.futures import wait, FIRST_COMPLETED
+                            done, not_done = wait(active_futures, return_when=FIRST_COMPLETED)
+
+                            for future in done:
+                                active_futures.remove(future)
+                                try:
+                                    chunk_results = future.result()
+                                    if chunk_results:
+                                        db_objects = []
+                                        for r in chunk_results:
+                                            br = BacktestResult(
+                                                strategy_id=job.strategy_id, job_id=job.id, symbol=symbol,
+                                                roi=r['roi'], sharpe=r['sharpe'], max_drawdown=r['max_drawdown'],
+                                                win_rate=r['win_rate'], trades_count=r['trades_count'],
+                                                metrics_json=r['metrics_json'], start_date=r['start_date'],
+                                                end_date=r['end_date'], timestamp=time.time()
+                                            )
+                                            db_objects.append(br)
+
+                                        if db_objects:
+                                            db.bulk_save_objects(db_objects)
+                                            db.commit()
+
+                                        current_count += len(chunk_results)
+                                        if current_count % (chunk_size * 10) == 0:
+                                            job.progress = min(100.0, (current_count / total_combos) * 100)
+                                            job.current_pair = symbol
+                                            db.commit()
+
+                                    # Submit Next Chunk
+                                    try:
+                                        next_chunk = next(chunk_gen)
+
+                                        # Check Pause/Cancel
+                                        db.refresh(job)
+                                        if job.status == 'cancelled':
+                                            executor.shutdown(wait=False)
+                                            return
+                                        while job.status == 'paused':
+                                            await asyncio.sleep(5)
+                                            db.refresh(job)
+
+                                        new_future = executor.submit(worker_task, df, next_chunk, indicators_defs)
+                                        active_futures.add(new_future)
+                                    except StopIteration:
+                                        pass # No more chunks
+
+                                except Exception as e:
+                                    traceback.print_exc()
+
+                            futures = list(active_futures)
 
             job.status = "completed"
             job.progress = 100.0
