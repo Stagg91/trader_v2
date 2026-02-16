@@ -209,7 +209,15 @@ class GridSearchRunner:
             # Update Job Status
             job.status = "running"
             # Ensure int cast for SQLAlchemy
-            total_combos = len(symbols) * int(np.prod([len(x) for x in param_ranges]))
+            # Fix OverflowError for large grid searches
+            raw_total = len(symbols) * float(np.prod([len(x) for x in param_ranges]))
+            max_int = 2**63 - 1
+            if raw_total > max_int:
+                total_combos = max_int # Clamp to max SQLite int
+                asyncio.create_task(LabLogger.log("BACKTEST", f"Warning: Total combinations ({raw_total}) exceeds DB limit. Display clamped."))
+            else:
+                total_combos = int(raw_total)
+
             job.total_combinations = total_combos
             db.commit()
 

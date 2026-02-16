@@ -740,7 +740,15 @@ async def start_grid_backtest(request: Request, strategy_id: int = Form(...), db
 @app.get("/backtest/jobs", response_class=HTMLResponse)
 async def jobs_page(request: Request, db: Session = Depends(get_db)):
     jobs = db.query(BacktestJob, Strategy).join(Strategy, BacktestJob.strategy_id == Strategy.id).order_by(BacktestJob.started_at.desc()).all()
-    return templates.TemplateResponse("jobs.html", {"request": request, "jobs": jobs})
+
+    # Calculate flag for template auto-refresh
+    has_running_jobs = any(job.status == 'running' for job, strat in jobs)
+
+    return templates.TemplateResponse("jobs.html", {
+        "request": request,
+        "jobs": jobs,
+        "has_running_jobs": has_running_jobs
+    })
 
 @app.post("/backtest/control/{job_id}")
 async def control_job(job_id: int, action: str = Form(...), db: Session = Depends(get_db)):
@@ -758,3 +766,39 @@ async def matrix_page(request: Request, job_id: int, db: Session = Depends(get_d
     strategy = db.query(Strategy).filter(Strategy.id == job.strategy_id).first() if job else None
     results = db.query(BacktestResult).filter(BacktestResult.job_id == job_id).order_by(BacktestResult.roi.desc()).limit(200).all()
     return templates.TemplateResponse("matrix.html", {"request": request, "job": job, "strategy": strategy, "results": results})
+
+@app.post("/settings/clean_db")
+async def clean_database(db: Session = Depends(get_db)):
+    try:
+        # 1. Delete orphan BacktestResults
+        # SQLite doesn't support JOIN in DELETE easily, so subquery
+        from sqlalchemy import text
+
+        # Delete results where strategy_id not in strategies
+        sql_delete_results = """
+            DELETE FROM backtest_results
+            WHERE strategy_id NOT IN (SELECT id FROM strategies)
+        """
+        db.execute(text(sql_delete_results))
+
+        # Delete jobs where strategy_id not in strategies
+        sql_delete_jobs = """
+            DELETE FROM backtest_jobs
+            WHERE strategy_id NOT IN (SELECT id FROM strategies)
+        """
+        db.execute(text(sql_delete_jobs))
+
+        db.commit()
+
+        # 2. VACUUM to reclaim space
+        db.execute(text("VACUUM;"))
+        # VACUUM usually requires no transaction or autocommit, but in SQLAlchemy session.execute it might work if session is committed.
+        # SQLite VACUUM cannot run inside a transaction.
+        # We need to ensure we are out of transaction.
+
+    except Exception as e:
+        await LabLogger.log("DB", f"Cleanup Error: {e}")
+        return RedirectResponse("/settings", status_code=303)
+
+    await LabLogger.log("DB", "Database cleanup and vacuum completed.")
+    return RedirectResponse("/settings", status_code=303)

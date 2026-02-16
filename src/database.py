@@ -14,7 +14,7 @@ class Settings(Base):
     paper_trading = Column(Boolean, default=True)
     paper_balance = Column(Float, default=10000.0)
     is_active = Column(Boolean, default=False)
-    auto_evolve = Column(Boolean, default=False)
+    auto_evolve = Column(Boolean, default=False) # Ensure default is False
     last_evolution_time = Column(Float, default=0.0)
     evolution_lookback_value = Column(Integer, default=3)
     evolution_lookback_unit = Column(String, default="Months")

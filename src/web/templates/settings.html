@@ -101,6 +101,17 @@
                         <button type="submit" class="btn btn-primary btn-lg"><i class="fa-solid fa-save"></i> Save Settings</button>
                     </div>
                 </form>
+
+                <hr class="border-secondary my-4">
+                <h5 class="text-danger mb-3">Maintenance</h5>
+                <form action="/settings/clean_db" method="post">
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-outline-danger" onclick="return confirm('This will delete all Backtest Results and Jobs associated with DELETED strategies, and then compact the database. Continue?');">
+                            <i class="fa-solid fa-broom"></i> Clean Database
+                        </button>
+                        <div class="form-text text-muted text-center mt-1">Deletes orphan records and runs VACUUM.</div>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
