@@ -56,8 +56,28 @@ def time_since(timestamp):
     if not timestamp: return 0
     diff = time.time() - timestamp
     return diff / 3600 # Hours
+
+def format_params(val):
+    if not val: return ""
+    try:
+        # If string, try to load as json
+        if isinstance(val, str):
+            val = json.loads(val)
+
+        # If list of strings (which is how backtester saves params)
+        if isinstance(val, list):
+            clean_list = []
+            for item in val:
+                s = str(item).replace("{", "").replace("}", "").replace("'", "").replace('"', '')
+                clean_list.append(s)
+            return ", ".join(clean_list)
+        return str(val)
+    except:
+        return str(val)
+
 templates.env.filters['time_since'] = time_since
 templates.env.filters['from_json'] = lambda x: json.loads(x) if x else {}
+templates.env.filters['format_params'] = format_params
 
 # ... (Previous WebSocket) ...
 @app.websocket("/ws/lab_log")
@@ -796,8 +816,34 @@ async def control_job(job_id: int, action: str = Form(...), db: Session = Depend
 async def matrix_page(request: Request, job_id: int, db: Session = Depends(get_db)):
     job = db.query(BacktestJob).filter(BacktestJob.id == job_id).first()
     strategy = db.query(Strategy).filter(Strategy.id == job.strategy_id).first() if job else None
-    results = db.query(BacktestResult).filter(BacktestResult.job_id == job_id).order_by(BacktestResult.roi.desc()).limit(200).all()
-    return templates.TemplateResponse("matrix.html", {"request": request, "job": job, "strategy": strategy, "results": results})
+
+    # Fetch ALL results (no limit)
+    results = db.query(BacktestResult).filter(BacktestResult.job_id == job_id).order_by(BacktestResult.roi.desc()).all()
+
+    # Prepare limited dataset for Chart to avoid browser lag
+    chart_data = []
+    # Top 500 performers for visualization
+    for r in results[:500]:
+        try:
+            m = json.loads(r.metrics_json)
+            p = m.get('params', [])
+            # Format params for tooltip
+            p_str = ", ".join([str(x).replace("{","").replace("}","").replace("'","") for x in p])
+            chart_data.append({
+                'symbol': r.symbol,
+                'x': r.max_drawdown,
+                'y': r.roi,
+                'params': p_str
+            })
+        except: pass
+
+    return templates.TemplateResponse("matrix.html", {
+        "request": request,
+        "job": job,
+        "strategy": strategy,
+        "results": results,
+        "chart_data": chart_data
+    })
 
 @app.post("/settings/clean_db")
 async def clean_database(db: Session = Depends(get_db)):
