@@ -12,7 +12,7 @@ from src.database import SessionLocal, BacktestJob, BacktestResult, Strategy, In
 from src.backtester import Backtester
 from src.strategies.schemas import StrategyRecipe, IndicatorConfig
 from src.logger import LabLogger
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 import multiprocessing
 
 # Global cache for worker process
@@ -118,25 +118,32 @@ class StandardStrategyLogic:
 
         return entry, exit
 
-def worker_task(data_path, combos_chunk, indicators_defs):
+def worker_task(data_source, combos_chunk, indicators_defs, is_file=True):
     """
-    Multiprocessing Worker Function.
-    Loads data from disk (cached) to avoid IPC overhead.
+    Worker Function.
+    data_source: File path (str) OR DataFrame (if threading)
     """
     global _worker_df, _worker_df_path
 
     results = []
 
     try:
-        # Load Data if needed
-        if _worker_df is None or _worker_df_path != data_path:
-            try:
-                _worker_df = pd.read_parquet(data_path)
-                _worker_df_path = data_path
-            except Exception as e:
-                return [{"error": f"Failed to load data from {data_path}: {e}"}]
+        # Load Data
+        df = None
+        if is_file:
+            if _worker_df is None or _worker_df_path != data_source:
+                try:
+                    _worker_df = pd.read_parquet(data_source)
+                    _worker_df_path = data_source
+                except Exception as e:
+                    return [{"error": f"Failed to load data from {data_source}: {e}"}]
+            df = _worker_df
+        else:
+            df = data_source
 
-        df = _worker_df
+        if df is None or df.empty:
+             return [{"error": "Empty DataFrame passed to worker"}]
+
         base_bt = Backtester(df, initial_balance=10000)
 
         for combo in combos_chunk:
@@ -348,6 +355,9 @@ class GridSearchRunner:
             def chunker(seq, size):
                 return (seq[pos:pos + size] for pos in range(0, len(seq), size))
 
+            # EXECUTION FLAGS
+            fallback_to_threading = False
+
             current_count = 0
 
             for symbol in symbols:
@@ -361,17 +371,16 @@ class GridSearchRunner:
                 df = de.fetch_ohlcv(symbol, interval="60", limit=200000, start_time=start_ms)
                 if df.empty: continue
 
-                # SAVE DF TO DISK
+                # Setup Data Passing
                 temp_file = f"temp_data_{self.job_id}_{symbol}.parquet"
                 df.to_parquet(temp_file)
 
-                # Use 'spawn' for stability
+                # Context
                 ctx = multiprocessing.get_context('spawn')
 
                 if use_genetic:
                     POP_SIZE = 100
                     GENERATIONS = 20
-
                     population = [self._generate_random_individual(indicators_defs) for _ in range(POP_SIZE)]
 
                     for gen in range(GENERATIONS):
@@ -385,48 +394,83 @@ class GridSearchRunner:
                         chunk_size = 50
                         fitness_scores = []
 
+                        # --- EXECUTION BLOCK ---
                         try:
-                            with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
+                            # 1. Try Multiprocessing
+                            if not fallback_to_threading:
+                                with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
+                                    futures = []
+                                    for chunk in chunker(population, chunk_size):
+                                        # Pass PATH
+                                        future = executor.submit(worker_task, temp_file, chunk, indicators_defs, True)
+                                        futures.append(future)
+
+                                    for future in as_completed(futures):
+                                        res_list = future.result()
+                                        if res_list:
+                                            # Handle Logic Error
+                                            if isinstance(res_list[0], dict) and "error" in res_list[0]:
+                                                # If it's a logic error, logging it is enough.
+                                                # If it's a crash, pool usually catches it.
+                                                continue
+
+                                            for r in res_list:
+                                                ind = r['combo']
+                                                roi = r['roi']
+                                                dd = r['max_drawdown']
+                                                fitness = roi - (dd * 0.5)
+                                                fitness_scores.append((ind, fitness))
+
+                                                # Save only high performers to DB to save space? Or all? All for matrix.
+                                                br = BacktestResult(
+                                                    strategy_id=job.strategy_id, job_id=job.id, symbol=symbol,
+                                                    roi=roi, sharpe=r['sharpe'], max_drawdown=dd, win_rate=r['win_rate'],
+                                                    trades_count=r['trades_count'], metrics_json=r['metrics_json'],
+                                                    start_date=r['start_date'], end_date=r['end_date'], timestamp=time.time()
+                                                )
+                                                # Single save to avoid complexity in fallback logic refactor
+                                                db.add(br)
+                                            db.commit()
+                                            current_count += len(res_list)
+
+                            # 2. Try Threading if fallback is active
+                            else:
+                                raise RuntimeError("Force Threading Fallback")
+
+                        except Exception as e:
+                            # Catch Pool Crash or Forced Fallback
+                            print(f"Pool Error: {e}. Falling back to Threading.")
+                            fallback_to_threading = True
+                            asyncio.create_task(LabLogger.log("BACKTEST", f"Switched to Threading Mode due to stability issues."))
+
+                            # Rerun current chunks with Threading
+                            # Pass DF directly
+                            fitness_scores = [] # Reset for this gen
+                            with ThreadPoolExecutor(max_workers=1) as executor: # Serial safety
                                 futures = []
                                 for chunk in chunker(population, chunk_size):
-                                    # Pass temp_file path instead of df
-                                    future = executor.submit(worker_task, temp_file, chunk, indicators_defs)
+                                    future = executor.submit(worker_task, df, chunk, indicators_defs, False)
                                     futures.append(future)
-
                                 for future in as_completed(futures):
                                     res_list = future.result()
-                                    if res_list:
-                                        if isinstance(res_list[0], dict) and "error" in res_list[0]:
-                                            asyncio.create_task(LabLogger.log("BACKTEST", f"Worker Error: {res_list[0]['error']}"))
-                                            continue
-
-                                        db_objects = []
+                                    if res_list and not (isinstance(res_list[0], dict) and "error" in res_list[0]):
                                         for r in res_list:
                                             ind = r['combo']
                                             roi = r['roi']
                                             dd = r['max_drawdown']
                                             fitness = roi - (dd * 0.5)
-
                                             fitness_scores.append((ind, fitness))
-
                                             br = BacktestResult(
                                                 strategy_id=job.strategy_id, job_id=job.id, symbol=symbol,
                                                 roi=roi, sharpe=r['sharpe'], max_drawdown=dd, win_rate=r['win_rate'],
                                                 trades_count=r['trades_count'], metrics_json=r['metrics_json'],
                                                 start_date=r['start_date'], end_date=r['end_date'], timestamp=time.time()
                                             )
-                                            db_objects.append(br)
-
-                                        if db_objects:
-                                            db.bulk_save_objects(db_objects)
-                                            db.commit()
-
+                                            db.add(br)
+                                        db.commit()
                                         current_count += len(res_list)
-                        except Exception as e:
-                             print(f"Pool Error: {e}")
-                             asyncio.create_task(LabLogger.log("BACKTEST", f"Process Pool Crashed: {e}. Aborting symbol."))
-                             break # Stop this symbol, try next?
 
+                        # --- EVOLUTION LOGIC ---
                         fitness_scores.sort(key=lambda x: x[1], reverse=True)
                         top_performers = [x[0] for x in fitness_scores[:int(POP_SIZE * 0.2)]]
 
@@ -434,103 +478,20 @@ class GridSearchRunner:
                             top_performers = [self._generate_random_individual(indicators_defs) for _ in range(10)]
 
                         new_pop = list(top_performers)
-
                         while len(new_pop) < POP_SIZE:
                             parent = random.choice(top_performers)
                             child = self._mutate_individual(parent, indicators_defs, mutation_rate=0.3)
                             new_pop.append(child)
-
                         population = new_pop
 
-                        # Fix Progress Bar for Genetic
-                        # total_combos is rough estimate. Let's use (gen / GENERATIONS) per symbol.
-                        # Symbols done = symbols.index(symbol)
                         sym_idx = symbols.index(symbol)
                         progress_per_sym = 100.0 / len(symbols)
                         base_progress = sym_idx * progress_per_sym
                         gen_progress = ((gen + 1) / GENERATIONS) * progress_per_sym
-
                         job.progress = min(100.0, base_progress + gen_progress)
-                        job.current_pair = f"{symbol} (Gen {gen+1})"
+                        mode_str = "Thr" if fallback_to_threading else "Proc"
+                        job.current_pair = f"{symbol} (Gen {gen+1}) [{mode_str}]"
                         db.commit()
-
-                else:
-                    product_iter = itertools.product(*param_ranges)
-                    def iter_chunker(iterable, size):
-                        it = iter(iterable)
-                        while True:
-                            chunk = list(itertools.islice(it, size))
-                            if not chunk:
-                                break
-                            yield chunk
-
-                    chunk_size = 500
-
-                    try:
-                        with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
-                            futures = []
-                            MAX_PENDING_FUTURES = max_workers * 2
-                            chunk_gen = iter_chunker(product_iter, chunk_size)
-
-                            for _ in range(MAX_PENDING_FUTURES):
-                                try:
-                                    chunk = next(chunk_gen)
-                                    future = executor.submit(worker_task, temp_file, chunk, indicators_defs)
-                                    futures.append(future)
-                                except StopIteration:
-                                    break
-
-                            while futures:
-                                from concurrent.futures import wait, FIRST_COMPLETED
-                                done, not_done = wait(futures, return_when=FIRST_COMPLETED)
-
-                                for future in done:
-                                    chunk_results = future.result()
-                                    if chunk_results:
-                                        if isinstance(chunk_results[0], dict) and "error" in chunk_results[0]:
-                                             asyncio.create_task(LabLogger.log("BACKTEST", f"Worker Error: {chunk_results[0]['error']}"))
-                                             continue
-
-                                        db_objects = []
-                                        for r in chunk_results:
-                                            br = BacktestResult(
-                                                strategy_id=job.strategy_id, job_id=job.id, symbol=symbol,
-                                                roi=r['roi'], sharpe=r['sharpe'], max_drawdown=r['max_drawdown'],
-                                                win_rate=r['win_rate'], trades_count=r['trades_count'],
-                                                metrics_json=r['metrics_json'], start_date=r['start_date'],
-                                                end_date=r['end_date'], timestamp=time.time()
-                                            )
-                                            db_objects.append(br)
-
-                                        if db_objects:
-                                            db.bulk_save_objects(db_objects)
-                                            db.commit()
-
-                                        current_count += len(chunk_results)
-                                        if current_count % (chunk_size * 10) == 0:
-                                            job.progress = min(100.0, (current_count / total_combos) * 100)
-                                            job.current_pair = symbol
-                                            db.commit()
-
-                                    try:
-                                        next_chunk = next(chunk_gen)
-                                        db.refresh(job)
-                                        if job.status == 'cancelled':
-                                            executor.shutdown(wait=False)
-                                            return
-                                        while job.status == 'paused':
-                                            await asyncio.sleep(5)
-                                            db.refresh(job)
-
-                                        new_future = executor.submit(worker_task, temp_file, next_chunk, indicators_defs)
-                                        not_done.add(new_future)
-                                    except StopIteration:
-                                        pass
-
-                                futures = list(not_done)
-                    except Exception as e:
-                        print(f"Pool/Logic Error: {e}")
-                        asyncio.create_task(LabLogger.log("BACKTEST", f"Critical Pool Error: {e}"))
 
                 # Cleanup temp file
                 if os.path.exists(temp_file):
