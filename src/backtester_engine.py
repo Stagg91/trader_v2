@@ -116,19 +116,10 @@ class StandardStrategyLogic:
 def worker_task(df, combos_chunk, indicators_defs):
     """
     Multiprocessing Worker Function.
-    Runs backtests for a chunk of combinations on the given DataFrame.
-    Returns a list of result dictionaries or a dict with error info.
     """
     results = []
 
-    # Debug logging to file from worker process (stdout might be buffered)
-    # with open("worker_debug.log", "a") as f:
-    #     f.write(f"Worker started. Processing {len(combos_chunk)} combos.\n")
-
     try:
-        # Initialize Backtester once per chunk
-        # Note: 'df' is a pickled copy.
-        # Ensure it's not empty or corrupted
         if df is None or df.empty:
             return [{"error": "Empty DataFrame passed to worker"}]
 
@@ -168,7 +159,7 @@ def worker_task(df, combos_chunk, indicators_defs):
 
                 res = base_bt.run_vectorized_backtest(recipe)
 
-                if res and "error" not in res: # Check backtester internal error
+                if res and "error" not in res:
                     safe_metrics = {
                         "roi": res['roi_percent'],
                         "dd": res['max_drawdown'],
@@ -187,23 +178,12 @@ def worker_task(df, combos_chunk, indicators_defs):
                         "end_date": str(df.iloc[-1]['startTime']),
                         "combo": combo
                     })
-                elif res and "error" in res:
-                    # Log specific backtest error for debugging?
-                    pass
-
             except Exception as e:
-                # Catch individual combo failure
-                # with open("worker_debug.log", "a") as f:
-                #    f.write(f"Combo Error: {e}\n")
                 pass
 
         return results
 
     except Exception as e:
-        # Catch critical worker failure (setup, import, etc)
-        err_msg = traceback.format_exc()
-        # with open("worker_debug.log", "a") as f:
-        #    f.write(f"Critical Worker Crash: {err_msg}\n")
         return [{"error": f"Critical Worker Crash: {str(e)}"}]
 
 class GridSearchRunner:
@@ -237,11 +217,20 @@ class GridSearchRunner:
     def _mutate_individual(self, individual, indicators_defs, mutation_rate=0.2):
         new_ind = list(individual)
         for i, params in enumerate(new_ind):
+            # Only mutate if there are parameters to mutate
+            if not params:
+                continue
+
             if random.random() < mutation_rate:
                 ind_def = indicators_defs[i]
                 new_params = params.copy()
 
-                p_name = random.choice(list(params.keys()))
+                # Check for empty params explicitly
+                param_keys = list(params.keys())
+                if not param_keys:
+                    continue
+
+                p_name = random.choice(param_keys)
                 p_cfg = ind_def['optimization_config'].get(p_name)
                 if p_cfg:
                     start = p_cfg.get('start', 10)
@@ -392,7 +381,6 @@ class GridSearchRunner:
                                 try:
                                     res_list = future.result()
                                     if res_list:
-                                        # Check for worker errors
                                         if isinstance(res_list[0], dict) and "error" in res_list[0]:
                                             asyncio.create_task(LabLogger.log("BACKTEST", f"Worker Error: {res_list[0]['error']}"))
                                             continue
@@ -470,8 +458,6 @@ class GridSearchRunner:
                                 break
 
                         while futures:
-                            # Use simple polling for robustness with spawn context
-                            # Wait for at least one future to complete
                             from concurrent.futures import wait, FIRST_COMPLETED
                             done, not_done = wait(futures, return_when=FIRST_COMPLETED)
 
@@ -481,9 +467,6 @@ class GridSearchRunner:
                                     if chunk_results:
                                         if isinstance(chunk_results[0], dict) and "error" in chunk_results[0]:
                                              asyncio.create_task(LabLogger.log("BACKTEST", f"Worker Error: {chunk_results[0]['error']}"))
-                                             # Fail job if critical error
-                                             # job.status = "failed"
-                                             # return
                                              continue
 
                                         db_objects = []
