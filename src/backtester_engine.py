@@ -117,68 +117,94 @@ def worker_task(df, combos_chunk, indicators_defs):
     """
     Multiprocessing Worker Function.
     Runs backtests for a chunk of combinations on the given DataFrame.
-    Returns a list of result dictionaries.
+    Returns a list of result dictionaries or a dict with error info.
     """
     results = []
-    base_bt = Backtester(df, initial_balance=10000)
 
-    for combo in combos_chunk:
-        try:
-            recipe_inds = []
-            entry_conds = []
-            exit_conds = []
+    # Debug logging to file from worker process (stdout might be buffered)
+    # with open("worker_debug.log", "a") as f:
+    #     f.write(f"Worker started. Processing {len(combos_chunk)} combos.\n")
 
-            for i, params in enumerate(combo):
-                ind_def = indicators_defs[i]
-                safe_params = {k: (int(v) if isinstance(v, (np.int64, np.int32)) else v) for k,v in params.items()}
-                col_id = f"ind_{i}"
+    try:
+        # Initialize Backtester once per chunk
+        # Note: 'df' is a pickled copy.
+        # Ensure it's not empty or corrupted
+        if df is None or df.empty:
+            return [{"error": "Empty DataFrame passed to worker"}]
 
-                e, x = StandardStrategyLogic.get_logic(ind_def['name'], safe_params, col_prefix=col_id)
-                entry_conds.append(f"({e})")
-                exit_conds.append(f"({x})")
+        base_bt = Backtester(df, initial_balance=10000)
 
-                recipe_inds.append(IndicatorConfig(
-                    name=ind_def['name'],
-                    params=safe_params,
-                    col_name=col_id
-                ))
+        for combo in combos_chunk:
+            try:
+                recipe_inds = []
+                entry_conds = []
+                exit_conds = []
 
-            full_entry = " & ".join(entry_conds)
-            full_exit = " & ".join(exit_conds)
+                for i, params in enumerate(combo):
+                    ind_def = indicators_defs[i]
+                    safe_params = {k: (int(v) if isinstance(v, (np.int64, np.int32)) else v) for k,v in params.items()}
+                    col_id = f"ind_{i}"
 
-            recipe = StrategyRecipe(
-                name="GridSearch",
-                description="Auto",
-                indicators=recipe_inds,
-                entry_logic=full_entry,
-                exit_logic=full_exit
-            )
+                    e, x = StandardStrategyLogic.get_logic(ind_def['name'], safe_params, col_prefix=col_id)
+                    entry_conds.append(f"({e})")
+                    exit_conds.append(f"({x})")
 
-            res = base_bt.run_vectorized_backtest(recipe)
+                    recipe_inds.append(IndicatorConfig(
+                        name=ind_def['name'],
+                        params=safe_params,
+                        col_name=col_id
+                    ))
 
-            if res:
-                safe_metrics = {
-                    "roi": res['roi_percent'],
-                    "dd": res['max_drawdown'],
-                    "trades": res['total_trades'],
-                    "params": [str(c) for c in combo]
-                }
+                full_entry = " & ".join(entry_conds)
+                full_exit = " & ".join(exit_conds)
 
-                results.append({
-                    "roi": res['roi_percent'],
-                    "sharpe": res['sharpe'],
-                    "max_drawdown": res['max_drawdown'],
-                    "win_rate": res['win_rate'],
-                    "trades_count": res['total_trades'],
-                    "metrics_json": json.dumps(safe_metrics),
-                    "start_date": str(df.iloc[0]['startTime']),
-                    "end_date": str(df.iloc[-1]['startTime']),
-                    "combo": combo
-                })
-        except:
-            pass
+                recipe = StrategyRecipe(
+                    name="GridSearch",
+                    description="Auto",
+                    indicators=recipe_inds,
+                    entry_logic=full_entry,
+                    exit_logic=full_exit
+                )
 
-    return results
+                res = base_bt.run_vectorized_backtest(recipe)
+
+                if res and "error" not in res: # Check backtester internal error
+                    safe_metrics = {
+                        "roi": res['roi_percent'],
+                        "dd": res['max_drawdown'],
+                        "trades": res['total_trades'],
+                        "params": [str(c) for c in combo]
+                    }
+
+                    results.append({
+                        "roi": res['roi_percent'],
+                        "sharpe": res['sharpe'],
+                        "max_drawdown": res['max_drawdown'],
+                        "win_rate": res['win_rate'],
+                        "trades_count": res['total_trades'],
+                        "metrics_json": json.dumps(safe_metrics),
+                        "start_date": str(df.iloc[0]['startTime']),
+                        "end_date": str(df.iloc[-1]['startTime']),
+                        "combo": combo
+                    })
+                elif res and "error" in res:
+                    # Log specific backtest error for debugging?
+                    pass
+
+            except Exception as e:
+                # Catch individual combo failure
+                # with open("worker_debug.log", "a") as f:
+                #    f.write(f"Combo Error: {e}\n")
+                pass
+
+        return results
+
+    except Exception as e:
+        # Catch critical worker failure (setup, import, etc)
+        err_msg = traceback.format_exc()
+        # with open("worker_debug.log", "a") as f:
+        #    f.write(f"Critical Worker Crash: {err_msg}\n")
+        return [{"error": f"Critical Worker Crash: {str(e)}"}]
 
 class GridSearchRunner:
     def __init__(self, job_id: int):
@@ -186,7 +212,6 @@ class GridSearchRunner:
         self.should_stop = False
 
     def _generate_random_individual(self, indicators_defs):
-        """Generates a random parameter set for the given indicators."""
         individual = []
         for ind_def in indicators_defs:
             params = {}
@@ -195,12 +220,9 @@ class GridSearchRunner:
                 stop = p_cfg.get('stop', 20)
                 step = p_cfg.get('step', 1)
 
-                # Random choice within range
-                # Use int/float based on default type
                 default_val = ind_def['default_params'].get(p_name)
                 is_int = isinstance(default_val, int)
 
-                # Generate valid steps
                 valid_values = list(np.arange(start, stop + step, step))
                 if is_int:
                     valid_values = [int(x) for x in valid_values]
@@ -210,18 +232,15 @@ class GridSearchRunner:
                 val = random.choice(valid_values)
                 params[p_name] = val
             individual.append(params)
-        return tuple(individual) # Tuple for hashability if needed
+        return tuple(individual)
 
     def _mutate_individual(self, individual, indicators_defs, mutation_rate=0.2):
-        """Mutates an individual slightly."""
         new_ind = list(individual)
         for i, params in enumerate(new_ind):
             if random.random() < mutation_rate:
-                # Mutate params for this indicator
                 ind_def = indicators_defs[i]
                 new_params = params.copy()
 
-                # Pick one param to change
                 p_name = random.choice(list(params.keys()))
                 p_cfg = ind_def['optimization_config'].get(p_name)
                 if p_cfg:
@@ -230,14 +249,11 @@ class GridSearchRunner:
                     step = p_cfg.get('step', 1)
 
                     current_val = params[p_name]
-                    # +/- step
                     delta = random.choice([-step, step])
                     new_val = current_val + delta
 
-                    # Clamp
                     new_val = max(start, min(stop, new_val))
 
-                    # Type check
                     default_val = ind_def['default_params'].get(p_name)
                     if isinstance(default_val, int):
                         new_val = int(new_val)
@@ -249,9 +265,6 @@ class GridSearchRunner:
         return tuple(new_ind)
 
     async def run(self):
-        """
-        Main execution loop. Switches between Grid Search and Genetic Algorithm based on size.
-        """
         print(f"DEBUG: Starting GridSearchRunner for Job {self.job_id}")
         db = SessionLocal()
         job = db.query(BacktestJob).filter(BacktestJob.id == self.job_id).first()
@@ -270,9 +283,8 @@ class GridSearchRunner:
 
             selected_names = strategy.content_json.get('indicators', [])
 
-            # 1. Fetch Definitions
             indicators_defs = []
-            param_ranges = [] # For grid search
+            param_ranges = []
 
             for name in selected_names:
                 ind_def = db.query(IndicatorDef).filter(IndicatorDef.name == name).first()
@@ -283,7 +295,6 @@ class GridSearchRunner:
                         "optimization_config": ind_def.optimization_config
                     })
 
-                    # For Grid Search Calculation
                     keys = []
                     lists = []
                     for p_name, p_cfg in ind_def.optimization_config.items():
@@ -305,7 +316,6 @@ class GridSearchRunner:
                         ind_combinations.append(param_dict)
                     param_ranges.append(ind_combinations)
 
-            # 2. Determine Scope
             from src.data_engine import DataEngine
             de = DataEngine()
             symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT"]
@@ -317,20 +327,18 @@ class GridSearchRunner:
             total_cores = multiprocessing.cpu_count()
             max_workers = max(1, int(total_cores * (cpu_limit / 100.0)))
 
-            # Calculate Total Size
             combinations_per_symbol = 1
             for r in param_ranges:
                 combinations_per_symbol *= len(r)
 
             raw_total = len(symbols) * float(combinations_per_symbol)
-            LIMIT_FOR_GRID = 10000000 # 10 Million
+            LIMIT_FOR_GRID = 10000000
 
             use_genetic = False
             if raw_total > LIMIT_FOR_GRID:
                 use_genetic = True
                 asyncio.create_task(LabLogger.log("BACKTEST", f"Warning: Combination count {raw_total:.2e} exceeds limit. Switching to Genetic Optimization."))
-                # Cap progress bar for GA
-                total_combos = 5000 * len(symbols) # e.g. 50 gens * 100 pop
+                total_combos = 5000 * len(symbols)
             else:
                 total_combos = int(raw_total)
 
@@ -338,13 +346,9 @@ class GridSearchRunner:
             job.started_at = time.time()
             db.commit()
 
-            # 3. Execution Logic
-
-            # Helper to chunk list
             def chunker(seq, size):
                 return (seq[pos:pos + size] for pos in range(0, len(seq), size))
 
-            # Loop Pairs
             current_count = 0
 
             for symbol in symbols:
@@ -353,18 +357,18 @@ class GridSearchRunner:
 
                 asyncio.create_task(LabLogger.log("BACKTEST", f"Processing {symbol}..."))
 
-                # Fetch Data
                 now_ms = int(time.time() * 1000)
                 start_ms = now_ms - (days * 24 * 60 * 60 * 1000)
                 df = de.fetch_ohlcv(symbol, interval="60", limit=200000, start_time=start_ms)
                 if df.empty: continue
 
-                # === GENETIC ALGORITHM PATH ===
+                # Use 'spawn' for stability
+                ctx = multiprocessing.get_context('spawn')
+
                 if use_genetic:
                     POP_SIZE = 100
-                    GENERATIONS = 20 # 2000 evals per symbol
+                    GENERATIONS = 20
 
-                    # Init Population (Random)
                     population = [self._generate_random_individual(indicators_defs) for _ in range(POP_SIZE)]
 
                     for gen in range(GENERATIONS):
@@ -375,11 +379,10 @@ class GridSearchRunner:
 
                         asyncio.create_task(LabLogger.log("BACKTEST", f"GA Gen {gen+1}/{GENERATIONS} | Pop: {len(population)}"))
 
-                        # Evaluate Population (Parallel)
-                        chunk_size = 50 # Half pop
-                        fitness_scores = [] # (ind, roi)
+                        chunk_size = 50
+                        fitness_scores = []
 
-                        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                        with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
                             futures = []
                             for chunk in chunker(population, chunk_size):
                                 future = executor.submit(worker_task, df, chunk, indicators_defs)
@@ -389,16 +392,17 @@ class GridSearchRunner:
                                 try:
                                     res_list = future.result()
                                     if res_list:
-                                        # Save Results
+                                        # Check for worker errors
+                                        if isinstance(res_list[0], dict) and "error" in res_list[0]:
+                                            asyncio.create_task(LabLogger.log("BACKTEST", f"Worker Error: {res_list[0]['error']}"))
+                                            continue
+
                                         db_objects = []
                                         for r in res_list:
-                                            # Reconstruct individual from r['combo'] if needed, or just use r['roi']
-                                            # We need to map back to original individual for breeding?
-                                            # worker_task returns 'combo'. This is our individual.
                                             ind = r['combo']
                                             roi = r['roi']
                                             dd = r['max_drawdown']
-                                            fitness = roi - (dd * 0.5) # Simple fitness function
+                                            fitness = roi - (dd * 0.5)
 
                                             fitness_scores.append((ind, fitness))
 
@@ -419,17 +423,13 @@ class GridSearchRunner:
                                 except Exception as e:
                                     traceback.print_exc()
 
-                        # Selection (Elitism + Roulette?)
-                        # Sort by fitness desc
                         fitness_scores.sort(key=lambda x: x[1], reverse=True)
-                        top_performers = [x[0] for x in fitness_scores[:int(POP_SIZE * 0.2)]] # Top 20%
+                        top_performers = [x[0] for x in fitness_scores[:int(POP_SIZE * 0.2)]]
 
                         if not top_performers:
-                            # Re-seed if all failed
                             top_performers = [self._generate_random_individual(indicators_defs) for _ in range(10)]
 
-                        # Breeding (Crossover + Mutation)
-                        new_pop = list(top_performers) # Elitism
+                        new_pop = list(top_performers)
 
                         while len(new_pop) < POP_SIZE:
                             parent = random.choice(top_performers)
@@ -438,20 +438,13 @@ class GridSearchRunner:
 
                         population = new_pop
 
-                        # Update Progress
                         job.progress = min(100.0, (current_count / total_combos) * 100)
                         job.current_pair = f"{symbol} (Gen {gen})"
                         db.commit()
 
-                # === GRID SEARCH PATH ===
                 else:
-                    # Use itertools.product directly with chunking to avoid huge list in memory
-                    # Problem: We can't slice a product object easily.
-                    # Solution: Helper generator that chunks the product iterator.
-
                     product_iter = itertools.product(*param_ranges)
 
-                    # Custom chunker for iterator
                     def iter_chunker(iterable, size):
                         it = iter(iterable)
                         while True:
@@ -462,14 +455,12 @@ class GridSearchRunner:
 
                     chunk_size = 500
 
-                    with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                    with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
                         futures = []
-                        # Limit pending futures to avoid memory bloat
                         MAX_PENDING_FUTURES = max_workers * 2
 
                         chunk_gen = iter_chunker(product_iter, chunk_size)
 
-                        # Initial fill
                         for _ in range(MAX_PENDING_FUTURES):
                             try:
                                 chunk = next(chunk_gen)
@@ -479,26 +470,22 @@ class GridSearchRunner:
                                 break
 
                         while futures:
-                            # Wait for at least one to complete
-                            # Ideally we use as_completed but we want to refill continuously
-                            # Simple approach: Wait for first completed, process, submit next
-                            # Actually, as_completed yields futures as they finish.
-
-                            # Let's use a set for active futures
-                            active_futures = set(futures)
-                            completed_futures = []
-
-                            # Wait for ONE result
-                            done, not_done = multiprocessing.connection.wait(active_futures, timeout=0.1) # Wait logic?
-                            # concurrent.futures.wait is better
+                            # Use simple polling for robustness with spawn context
+                            # Wait for at least one future to complete
                             from concurrent.futures import wait, FIRST_COMPLETED
-                            done, not_done = wait(active_futures, return_when=FIRST_COMPLETED)
+                            done, not_done = wait(futures, return_when=FIRST_COMPLETED)
 
                             for future in done:
-                                active_futures.remove(future)
                                 try:
                                     chunk_results = future.result()
                                     if chunk_results:
+                                        if isinstance(chunk_results[0], dict) and "error" in chunk_results[0]:
+                                             asyncio.create_task(LabLogger.log("BACKTEST", f"Worker Error: {chunk_results[0]['error']}"))
+                                             # Fail job if critical error
+                                             # job.status = "failed"
+                                             # return
+                                             continue
+
                                         db_objects = []
                                         for r in chunk_results:
                                             br = BacktestResult(
@@ -520,11 +507,9 @@ class GridSearchRunner:
                                             job.current_pair = symbol
                                             db.commit()
 
-                                    # Submit Next Chunk
                                     try:
                                         next_chunk = next(chunk_gen)
 
-                                        # Check Pause/Cancel
                                         db.refresh(job)
                                         if job.status == 'cancelled':
                                             executor.shutdown(wait=False)
@@ -534,14 +519,14 @@ class GridSearchRunner:
                                             db.refresh(job)
 
                                         new_future = executor.submit(worker_task, df, next_chunk, indicators_defs)
-                                        active_futures.add(new_future)
+                                        not_done.add(new_future)
                                     except StopIteration:
-                                        pass # No more chunks
+                                        pass
 
                                 except Exception as e:
                                     traceback.print_exc()
 
-                            futures = list(active_futures)
+                            futures = list(not_done)
 
             job.status = "completed"
             job.progress = 100.0

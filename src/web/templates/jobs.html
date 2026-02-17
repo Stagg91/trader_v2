@@ -36,6 +36,8 @@
                             <span class="badge bg-warning">Paused</span>
                         {% elif job.status == 'cancelled' %}
                             <span class="badge bg-secondary">Cancelled</span>
+                        {% elif job.status == 'failed' %}
+                            <span class="badge bg-danger" title="Check System Console for details">Failed</span>
                         {% else %}
                             <span class="badge bg-light text-dark">{{ job.status }}</span>
                         {% endif %}
@@ -52,7 +54,7 @@
                             </small>
                         </div>
                         <div class="progress" style="height: 20px;">
-                            <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: {{ job.progress }}%;" aria-valuenow="{{ job.progress }}" aria-valuemin="0" aria-valuemax="100"></div>
+                            <div class="progress-bar progress-bar-striped progress-bar-animated {{ 'bg-danger' if job.status == 'failed' else '' }}" role="progressbar" style="width: {{ job.progress }}%;" aria-valuenow="{{ job.progress }}" aria-valuemin="0" aria-valuemax="100"></div>
                         </div>
                     </td>
                     <td>{{ job.current_pair }}</td>
