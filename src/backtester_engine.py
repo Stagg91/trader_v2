@@ -6,6 +6,7 @@ import json
 import itertools
 import traceback
 import random
+import os
 from sqlalchemy.orm import Session
 from src.database import SessionLocal, BacktestJob, BacktestResult, Strategy, IndicatorDef, Settings
 from src.backtester import Backtester
@@ -13,6 +14,10 @@ from src.strategies.schemas import StrategyRecipe, IndicatorConfig
 from src.logger import LabLogger
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing
+
+# Global cache for worker process
+_worker_df = None
+_worker_df_path = None
 
 class StandardStrategyLogic:
     @staticmethod
@@ -113,16 +118,25 @@ class StandardStrategyLogic:
 
         return entry, exit
 
-def worker_task(df, combos_chunk, indicators_defs):
+def worker_task(data_path, combos_chunk, indicators_defs):
     """
     Multiprocessing Worker Function.
+    Loads data from disk (cached) to avoid IPC overhead.
     """
+    global _worker_df, _worker_df_path
+
     results = []
 
     try:
-        if df is None or df.empty:
-            return [{"error": "Empty DataFrame passed to worker"}]
+        # Load Data if needed
+        if _worker_df is None or _worker_df_path != data_path:
+            try:
+                _worker_df = pd.read_parquet(data_path)
+                _worker_df_path = data_path
+            except Exception as e:
+                return [{"error": f"Failed to load data from {data_path}: {e}"}]
 
+        df = _worker_df
         base_bt = Backtester(df, initial_balance=10000)
 
         for combo in combos_chunk:
@@ -217,18 +231,14 @@ class GridSearchRunner:
     def _mutate_individual(self, individual, indicators_defs, mutation_rate=0.2):
         new_ind = list(individual)
         for i, params in enumerate(new_ind):
-            # Only mutate if there are parameters to mutate
-            if not params:
-                continue
+            if not params: continue
 
             if random.random() < mutation_rate:
                 ind_def = indicators_defs[i]
                 new_params = params.copy()
 
-                # Check for empty params explicitly
                 param_keys = list(params.keys())
-                if not param_keys:
-                    continue
+                if not param_keys: continue
 
                 p_name = random.choice(param_keys)
                 p_cfg = ind_def['optimization_config'].get(p_name)
@@ -351,6 +361,10 @@ class GridSearchRunner:
                 df = de.fetch_ohlcv(symbol, interval="60", limit=200000, start_time=start_ms)
                 if df.empty: continue
 
+                # SAVE DF TO DISK
+                temp_file = f"temp_data_{self.job_id}_{symbol}.parquet"
+                df.to_parquet(temp_file)
+
                 # Use 'spawn' for stability
                 ctx = multiprocessing.get_context('spawn')
 
@@ -371,14 +385,15 @@ class GridSearchRunner:
                         chunk_size = 50
                         fitness_scores = []
 
-                        with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
-                            futures = []
-                            for chunk in chunker(population, chunk_size):
-                                future = executor.submit(worker_task, df, chunk, indicators_defs)
-                                futures.append(future)
+                        try:
+                            with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
+                                futures = []
+                                for chunk in chunker(population, chunk_size):
+                                    # Pass temp_file path instead of df
+                                    future = executor.submit(worker_task, temp_file, chunk, indicators_defs)
+                                    futures.append(future)
 
-                            for future in as_completed(futures):
-                                try:
+                                for future in as_completed(futures):
                                     res_list = future.result()
                                     if res_list:
                                         if isinstance(res_list[0], dict) and "error" in res_list[0]:
@@ -407,9 +422,10 @@ class GridSearchRunner:
                                             db.commit()
 
                                         current_count += len(res_list)
-
-                                except Exception as e:
-                                    traceback.print_exc()
+                        except Exception as e:
+                             print(f"Pool Error: {e}")
+                             asyncio.create_task(LabLogger.log("BACKTEST", f"Process Pool Crashed: {e}. Aborting symbol."))
+                             break # Stop this symbol, try next?
 
                         fitness_scores.sort(key=lambda x: x[1], reverse=True)
                         top_performers = [x[0] for x in fitness_scores[:int(POP_SIZE * 0.2)]]
@@ -426,13 +442,20 @@ class GridSearchRunner:
 
                         population = new_pop
 
-                        job.progress = min(100.0, (current_count / total_combos) * 100)
-                        job.current_pair = f"{symbol} (Gen {gen})"
+                        # Fix Progress Bar for Genetic
+                        # total_combos is rough estimate. Let's use (gen / GENERATIONS) per symbol.
+                        # Symbols done = symbols.index(symbol)
+                        sym_idx = symbols.index(symbol)
+                        progress_per_sym = 100.0 / len(symbols)
+                        base_progress = sym_idx * progress_per_sym
+                        gen_progress = ((gen + 1) / GENERATIONS) * progress_per_sym
+
+                        job.progress = min(100.0, base_progress + gen_progress)
+                        job.current_pair = f"{symbol} (Gen {gen+1})"
                         db.commit()
 
                 else:
                     product_iter = itertools.product(*param_ranges)
-
                     def iter_chunker(iterable, size):
                         it = iter(iterable)
                         while True:
@@ -443,26 +466,25 @@ class GridSearchRunner:
 
                     chunk_size = 500
 
-                    with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
-                        futures = []
-                        MAX_PENDING_FUTURES = max_workers * 2
+                    try:
+                        with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as executor:
+                            futures = []
+                            MAX_PENDING_FUTURES = max_workers * 2
+                            chunk_gen = iter_chunker(product_iter, chunk_size)
 
-                        chunk_gen = iter_chunker(product_iter, chunk_size)
-
-                        for _ in range(MAX_PENDING_FUTURES):
-                            try:
-                                chunk = next(chunk_gen)
-                                future = executor.submit(worker_task, df, chunk, indicators_defs)
-                                futures.append(future)
-                            except StopIteration:
-                                break
-
-                        while futures:
-                            from concurrent.futures import wait, FIRST_COMPLETED
-                            done, not_done = wait(futures, return_when=FIRST_COMPLETED)
-
-                            for future in done:
+                            for _ in range(MAX_PENDING_FUTURES):
                                 try:
+                                    chunk = next(chunk_gen)
+                                    future = executor.submit(worker_task, temp_file, chunk, indicators_defs)
+                                    futures.append(future)
+                                except StopIteration:
+                                    break
+
+                            while futures:
+                                from concurrent.futures import wait, FIRST_COMPLETED
+                                done, not_done = wait(futures, return_when=FIRST_COMPLETED)
+
+                                for future in done:
                                     chunk_results = future.result()
                                     if chunk_results:
                                         if isinstance(chunk_results[0], dict) and "error" in chunk_results[0]:
@@ -492,7 +514,6 @@ class GridSearchRunner:
 
                                     try:
                                         next_chunk = next(chunk_gen)
-
                                         db.refresh(job)
                                         if job.status == 'cancelled':
                                             executor.shutdown(wait=False)
@@ -501,15 +522,19 @@ class GridSearchRunner:
                                             await asyncio.sleep(5)
                                             db.refresh(job)
 
-                                        new_future = executor.submit(worker_task, df, next_chunk, indicators_defs)
+                                        new_future = executor.submit(worker_task, temp_file, next_chunk, indicators_defs)
                                         not_done.add(new_future)
                                     except StopIteration:
                                         pass
 
-                                except Exception as e:
-                                    traceback.print_exc()
+                                futures = list(not_done)
+                    except Exception as e:
+                        print(f"Pool/Logic Error: {e}")
+                        asyncio.create_task(LabLogger.log("BACKTEST", f"Critical Pool Error: {e}"))
 
-                            futures = list(not_done)
+                # Cleanup temp file
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
 
             job.status = "completed"
             job.progress = 100.0
