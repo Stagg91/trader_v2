@@ -1,0 +1,106 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-12">
+        <h2>Indicator Library</h2>
+        <p>Manage default indicators and their optimization ranges for Grid Search.</p>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-striped table-hover">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Name</th>
+                        <th>Category</th>
+                        <th>Default Params</th>
+                        <th>Optimization Config</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for ind in indicators %}
+                    <tr>
+                        <td>{{ ind.id }}</td>
+                        <td>{{ ind.name|upper }}</td>
+                        <td>{{ ind.category }}</td>
+                        <td><code>{{ ind.default_params }}</code></td>
+                        <td><pre>{{ ind.optimization_config|tojson(indent=2) }}</pre></td>
+                        <td>
+                            <button type="button" class="btn btn-sm btn-primary"
+                                    data-bs-toggle="modal"
+                                    data-bs-target="#editModal"
+                                    data-id="{{ ind.id }}"
+                                    data-name="{{ ind.name }}"
+                                    data-config='{{ ind.optimization_config|tojson }}'>
+                                Edit Ranges
+                            </button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Modal -->
+<div class="modal fade" id="editModal" tabindex="-1" aria-labelledby="editModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <form method="post" action="/indicators/update">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="editModalLabel">Edit Optimization Config</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" name="ind_id" id="modal-ind-id">
+        <div class="mb-3">
+            <label for="modal-ind-name" class="form-label">Indicator</label>
+            <input type="text" class="form-control" id="modal-ind-name" readonly>
+        </div>
+        <div class="mb-3">
+            <label for="modal-opt-config" class="form-label">Config (JSON)</label>
+            <textarea class="form-control" id="modal-opt-config" name="opt_config" rows="10" required></textarea>
+            <div class="form-text">Format: {"param": {"start": 10, "stop": 50, "step": 5}}</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+      </div>
+    </div>
+    </form>
+  </div>
+</div>
+
+<script>
+    var editModal = document.getElementById('editModal')
+    editModal.addEventListener('show.bs.modal', function (event) {
+      var button = event.relatedTarget
+      var id = button.getAttribute('data-id')
+      var name = button.getAttribute('data-name')
+      var config = button.getAttribute('data-config')
+
+      var modalTitle = editModal.querySelector('.modal-title')
+      var modalIdInput = editModal.querySelector('#modal-ind-id')
+      var modalNameInput = editModal.querySelector('#modal-ind-name')
+      var modalConfigInput = editModal.querySelector('#modal-opt-config')
+
+      modalTitle.textContent = 'Edit Config: ' + name
+      modalIdInput.value = id
+      modalNameInput.value = name
+      // Pretty print JSON in textarea
+      try {
+          var obj = JSON.parse(config);
+          modalConfigInput.value = JSON.stringify(obj, null, 2);
+      } catch(e) {
+          modalConfigInput.value = config;
+      }
+    })
+</script>
+{% endblock %}

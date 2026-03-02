@@ -330,6 +330,9 @@ def main():
         bot_thread = threading.Thread(target=bot_loop, daemon=True)
         bot_thread.start()
 
+        # Check if auto-evolve is genuinely enabled before starting thread to save resources
+        # The loop itself checks the flag, but starting the thread is overhead if never used.
+        # We start it anyway to allow dynamic enabling from UI without restart.
         evo_thread = threading.Thread(target=evolution_loop, daemon=True)
         evo_thread.start()
 

@@ -54,6 +54,18 @@
                         <label for="evoInterval">Evolution Interval (Minutes)</label>
                     </div>
 
+                    <label for="cpuLimit" class="form-label text-gold">Grid Search CPU Limit: <span id="cpuVal">{{ settings.cpu_usage_limit if settings else 80 }}</span>%</label>
+                    <div class="mb-4">
+                        <input type="range" class="form-range" min="10" max="100" step="5" id="cpuLimit" name="cpu_usage_limit" value="{{ settings.cpu_usage_limit if settings else 80 }}" oninput="document.getElementById('cpuVal').innerText = this.value">
+                        <div class="form-text">Lower this value if the backtest slows down your PC.</div>
+                    </div>
+
+                    <label for="gridDays" class="form-label text-gold">Grid Search Data Lookback (Days)</label>
+                    <div class="form-floating mb-3">
+                        <input type="number" name="grid_search_days" class="form-control bg-dark text-white border-secondary" id="gridDays" value="{{ settings.grid_search_days if settings else 30 }}" min="1" max="365">
+                        <label for="gridDays">Days of history to test against</label>
+                    </div>
+
                     <label class="form-label mt-2">Evolution Lookback Period</label>
                     <div class="input-group mb-3">
                         <input type="number" name="evolution_lookback_value" class="form-control bg-dark text-white border-secondary" value="{{ settings.evolution_lookback_value }}" min="1">
@@ -93,6 +105,17 @@
 
                     <div class="d-grid gap-2 mt-4">
                         <button type="submit" class="btn btn-primary btn-lg"><i class="fa-solid fa-save"></i> Save Settings</button>
+                    </div>
+                </form>
+
+                <hr class="border-secondary my-4">
+                <h5 class="text-danger mb-3">Maintenance</h5>
+                <form action="/settings/clean_db" method="post">
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-outline-danger" onclick="return confirm('This will delete all Backtest Results and Jobs associated with DELETED strategies, and then compact the database. Continue?');">
+                            <i class="fa-solid fa-broom"></i> Clean Database
+                        </button>
+                        <div class="form-text text-muted text-center mt-1">Deletes orphan records and runs VACUUM.</div>
                     </div>
                 </form>
             </div>

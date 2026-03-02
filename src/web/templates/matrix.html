@@ -1,0 +1,229 @@
+{% extends "layout.html" %}
+
+{% block head %}
+<!-- DataTables CSS (Bootstrap 5) -->
+<link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css">
+<style>
+    /* Custom style for small table font */
+    #matrixTable {
+        font-size: 0.85rem;
+    }
+    .param-cell {
+        font-family: monospace;
+        color: #aaa;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-12">
+        <h2>Strategy Matrix: {{ strategy.name }}</h2>
+        <p>Results for Job #{{ job.id }}. Showing {{ results|length }} combinations.</p>
+        {% if results|length > 500 %}
+        <div class="alert alert-warning py-2">
+            <i class="fa-solid fa-triangle-exclamation"></i>
+            Large dataset ({{ results|length }} rows). Chart is limited to top 500 performers for performance. Table shows all.
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Scatter Plots Container -->
+<div id="matrixCharts" class="row mb-5">
+    <!-- Charts will be injected here -->
+</div>
+
+<div class="card bg-dark border-secondary">
+    <div class="card-header border-secondary">
+        <i class="fa-solid fa-list"></i> Full Results
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-sm table-striped table-hover table-dark" id="matrixTable" style="width:100%">
+                <thead>
+                    <tr>
+                        <th>Symbol</th>
+                        <th>ROI %</th>
+                        <th>Drawdown %</th>
+                        <th>Trades</th>
+                        <th>Win Rate %</th>
+                        <th>Sharpe</th>
+                        <th>Params</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for res in results %}
+                    {% set metrics = res.metrics_json|from_json %}
+                    <tr>
+                        <td>{{ res.symbol }}</td>
+                        <td class="{{ 'text-success' if res.roi > 0 else 'text-danger' }}">
+                            {{ "%.2f"|format(res.roi) }}
+                        </td>
+                        <td class="text-danger">{{ "%.2f"|format(res.max_drawdown) }}</td>
+                        <td>{{ res.trades_count }}</td>
+                        <td>{{ "%.1f"|format(res.win_rate) }}</td>
+                        <td>{{ "%.2f"|format(res.sharpe) }}</td>
+                        <td class="param-cell">{{ metrics.params|format_params }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<!-- jQuery & DataTables -->
+<script src="https://code.jquery.com/jquery-3.7.0.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script src="https://cdn.datatables.net/1.13.6/js/dataTables.bootstrap5.min.js"></script>
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+// Auto-refresh if job is running
+{% if job.status == 'running' %}
+setTimeout(function(){
+   // Only refresh if we are not interacting with the table?
+   // Or just reload. If user is sorting, reload might be annoying.
+   // But standard behavior for running job monitoring is to refresh.
+   location.reload();
+}, 10000); // Increased to 10s to give time to read
+{% endif %}
+
+// Initialize DataTables
+$(document).ready(function() {
+    $('#matrixTable').DataTable({
+        "order": [[ 1, "desc" ]], // Sort by ROI desc by default
+        "pageLength": 25,
+        "lengthMenu": [[10, 25, 50, 100, -1], [10, 25, 50, 100, "All"]],
+        "deferRender": true, // Critical for large datasets
+        "language": {
+            "search": "Filter:",
+            "paginate": {
+                "previous": "<i class='fa-solid fa-chevron-left'></i>",
+                "next": "<i class='fa-solid fa-chevron-right'></i>"
+            }
+        }
+    });
+
+    initCharts();
+});
+
+function initCharts() {
+    // Chart data passed from server (Top 500)
+    const rawData = {{ chart_data|tojson }};
+
+    const dataBySymbol = {};
+
+    // Group by Symbol
+    rawData.forEach(pt => {
+        if (!dataBySymbol[pt.symbol]) {
+            dataBySymbol[pt.symbol] = [];
+        }
+        dataBySymbol[pt.symbol].push(pt);
+    });
+
+    const container = document.getElementById('matrixCharts');
+
+    if (Object.keys(dataBySymbol).length === 0) {
+        container.innerHTML = '<div class="col-12 text-muted">No chart data available.</div>';
+        return;
+    }
+
+    Object.keys(dataBySymbol).forEach((symbol, index) => {
+        // Create Column
+        const colDiv = document.createElement('div');
+        colDiv.className = "col-md-6 mb-4";
+
+        // Create Card
+        const card = document.createElement('div');
+        card.className = "card h-100 bg-dark border-secondary";
+
+        const cardHeader = document.createElement('div');
+        cardHeader.className = "card-header text-gold";
+        cardHeader.innerHTML = `<i class="fa-solid fa-chart-scatter"></i> ${symbol} - ROI vs Risk (Top Performers)`;
+
+        const cardBody = document.createElement('div');
+        cardBody.className = "card-body";
+
+        const canvas = document.createElement('canvas');
+        canvas.id = `chart-${symbol}`;
+        canvas.style.maxHeight = "300px";
+
+        cardBody.appendChild(canvas);
+        card.appendChild(cardHeader);
+        card.appendChild(cardBody);
+        colDiv.appendChild(card);
+        container.appendChild(colDiv);
+
+        // Render Chart
+        const ctx = canvas.getContext('2d');
+        new Chart(ctx, {
+            type: 'scatter',
+            data: {
+                datasets: [{
+                    label: 'Result',
+                    data: dataBySymbol[symbol],
+                    backgroundColor: function(context) {
+                        const val = context.raw?.y;
+                        return val >= 0 ? 'rgba(0, 255, 0, 0.6)' : 'rgba(255, 99, 132, 0.6)';
+                    },
+                    borderColor: 'rgba(255, 255, 255, 0.8)',
+                    borderWidth: 1,
+                    pointRadius: 4,
+                    pointHoverRadius: 6
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const pt = context.raw;
+                                return `ROI: ${pt.y.toFixed(2)}% | DD: ${pt.x.toFixed(2)}%`;
+                            },
+                            afterLabel: function(context) {
+                                const pt = context.raw;
+                                let p = pt.params;
+                                if(p.length > 50) p = p.substring(0, 50) + "...";
+                                return `Params: ${p}`;
+                            }
+                        }
+                    },
+                    legend: {
+                        display: false
+                    }
+                },
+                scales: {
+                    x: {
+                        type: 'linear',
+                        position: 'bottom',
+                        title: {
+                            display: true,
+                            text: 'Max Drawdown (%)',
+                            color: '#aaa'
+                        },
+                        grid: { color: '#333' },
+                        ticks: { color: '#ddd' }
+                    },
+                    y: {
+                        title: {
+                            display: true,
+                            text: 'ROI (%)',
+                            color: '#aaa'
+                        },
+                        grid: { color: '#333' },
+                        ticks: { color: '#ddd' }
+                    }
+                }
+            }
+        });
+    });
+}
+</script>
+{% endblock %}
